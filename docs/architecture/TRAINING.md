@@ -22,8 +22,8 @@ or the two LoRAs will not stack. Training Flux on a ~16 GB GPU needs the base
 quantized. kohya sd-scripts loads the whole Flux DiT to the GPU *before* its
 block-swap offload and OOMs at the load peak; it has no sub-fp8 **training**
 quantization. [ostris **ai-toolkit**](https://github.com/ostris/ai-toolkit) can
-quantize the transformer **and** the text encoder to `qint4` with `low_vram`, which
-fits. So this stage shells out to ai-toolkit (the sibling *style* pipeline uses
+quantize the transformer **and** the text encoder to `qfloat8` with `low_vram`,
+which fits. So this stage shells out to ai-toolkit (the sibling *style* pipeline uses
 kohya; the char side does not).
 
 The trainer runs in **ai-toolkit's own venv** (its cu128/sm_120 torch). We only
@@ -40,18 +40,38 @@ on this box. The load-bearing parts:
 |--------|-------|-----|
 | `model.name_or_path` | `black-forest-labs/FLUX.1-dev` | same base as the style LoRA — mandatory to stack |
 | `model.is_flux` | `true` | Flux training path |
-| `model.quantize` + `qtype`/`qtype_te` | `true` / `qint4` | quantize transformer **and** text encoder — the bit kohya can't do |
-| `model.low_vram` | `true` | quantize on CPU; fits ~16 GB |
-| `network` | `lora`, `linear=16`, `linear_alpha=16` | LoRA rank/alpha (tune by result) |
+| `model.quantize` + `qtype`/`qtype_te` | `true` / **`qfloat8`** | quantize transformer **and** text encoder — the bit kohya can't do. **Not `qint4`** (see gotchas) |
+| `model.low_vram` | `true` | quantize on CPU + stream blocks; keeps the GPU load peak low (the GPU also drives the display) |
+| `train.dtype` | `bf16` | Flux is bf16-native; fp16 risks an empty/NaN LoRA |
+| `train.optimizer` | `adafactor` | near-zero optimizer state → fits ~16 GB (adamw8bit needs more) |
+| `network` | `lora`, `linear=32`, `linear_alpha=16` | LoRA rank/alpha (16–32 fine; tune by eval) |
 | `datasets[0].folder_path` | `03_dataset/<N>_<trigger>` | our kohya dataset |
 | `datasets[0].caption_ext` + `shuffle_tokens=false` | `txt` | `.txt` sidecars; the leading `<char>_char` trigger stays pinned |
 | `train.train_text_encoder` | `false` | not supported for Flux |
 | `train.noise_scheduler` | `flowmatch` | Flux flow-matching |
-| `train.disable_sampling` | `true` | headless; stack eval is a separate step (ai-toolkit can only sample the char LoRA alone) |
+| `train.disable_sampling` | `true` | in-training sampling moves the whole transformer to the GPU at once and OOMs ~16 GB; eval **post-hoc in ComfyUI** instead |
 
-**Captions** stay content + identity only (the trigger token, pose, subject,
-framing). Style words are **never** written — the cmcstyle LoRA carries the style
-at inference. Every knob is overridable via `APP_TRAIN_*` (see `.env.example`).
+**Captions** stay content + identity only (the trigger token + only what *varies*:
+pose, outfit, expression, background, camera shot). Identity features (face shape,
+hair colour, body) are **left undescribed** so they bind to the trigger — the
+inverse of a style LoRA. Style words are never written; the cmcstyle LoRA carries
+the style at inference. Every knob is overridable via `APP_TRAIN_*` (see `.env.example`).
+
+### Box gotchas (RTX 5070 Ti, 16 GB, drives the display)
+
+- **Never `qint4` with `low_vram`.** qint4's `int4pack` kernel is CUDA-only, but
+  `low_vram` quantizes on the CPU → `NotImplementedError`; ai-toolkit then writes a
+  config but **no `.safetensors`** (a silent failure). `build_aitoolkit_config`
+  raises on this combo. Use `qfloat8` (fp8 casts fine on CPU).
+- **Run online.** Do not set `HF_HUB_OFFLINE=1` — ai-toolkit's `model_info` call
+  raises instead of using the cache; the cached rev equals `main`, so online does
+  not re-download. The HF token may live in the `huggingface-cli` cache rather than
+  `.env` (the `doctor` token check then WARNs, not FAILs — both are honored).
+- **Pick the best checkpoint by eval**, not the last (`max_step_saves_to_keep=8`):
+  characters want likeness *and* prompt flexibility, which peak before the final step.
+- **De-risk first:** before a 4–5 h run (~7–9 s/it at 512 under `low_vram`), do a
+  fit-check (`APP_TRAIN_STEPS=5 APP_TRAIN_SAVE_EVERY=5`) and confirm a `.safetensors`
+  is written.
 
 ## Running it
 

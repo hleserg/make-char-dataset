@@ -53,7 +53,7 @@ into ~30–40 diverse, in-style variants locally.
   torch/diffusers/onnxruntime.
 - **train** *(opt-in)* — `train.py` trains the character LoRA from `03_dataset`
   into `06_lora/` by shelling out to **ai-toolkit** (not kohya: only it can
-  qint4-quantize the Flux base to fit ~16 GB). Pure config/launch/progress
+  qfloat8-quantize the Flux base to fit ~16 GB). Pure config/launch/progress
   builders behind a `Trainer` Protocol; the heavy run is a subprocess into
   ai-toolkit's own venv. The trained LoRA is meant to **stack** with the external
   style LoRA — `Flux + cmcstyle + <char>_char`. See

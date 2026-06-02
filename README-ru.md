@@ -35,7 +35,7 @@ LoRA**. Это шаг *локального размножения* в пайп�
 Персонажная LoRA обучается на **Flux.1-dev**, чтобы стэкаться со стилевой LoRA
 комикса (`Flux + cmcstyle + <char>_char`). Обучение запускается через
 [ostris **ai-toolkit**](https://github.com/ostris/ai-toolkit), а не kohya: только он
-умеет квантовать базу Flux в `qint4` и влезть в ~16 ГБ VRAM. См.
+умеет квантовать базу Flux в `qfloat8` и влезть в ~16 ГБ VRAM. См.
 [docs/architecture/TRAINING.md](docs/architecture/TRAINING.md).
 
 ```bash
