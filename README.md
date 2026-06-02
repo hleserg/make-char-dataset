@@ -56,6 +56,11 @@ make-char-dataset doctor              # check the training env (no GPU)
 make-char-dataset train --trigger kael   # -> 06_lora/kael/kael.safetensors
 ```
 
+The heavy steps can also run on a **cheap cloud GPU** without changing the local
+default: training via an opt-in SSH backend (`APP_TRAIN_BACKEND=ssh`), inference by
+pointing `APP_COMFY_URL` at a remote ComfyUI — see
+[docs/architecture/CLOUD.md](docs/architecture/CLOUD.md).
+
 ## Quickstart
 
 ```bash

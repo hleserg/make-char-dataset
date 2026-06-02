@@ -101,6 +101,15 @@ isolated. That side-by-side eval grid is produced by a sibling stage (HLE-804
 bridge) is the sibling "restylization generation" stage. This stage is only the
 training step between them.
 
+## Running on a cloud GPU (opt-in)
+
+The local box trains Flux at the edge of 16 GB. To run the heavy training on a
+cheap cloud GPU instead, set `APP_TRAIN_BACKEND=ssh` (+ `APP_TRAIN_SSH_*`): the
+stage rsyncs the dataset to a rented GPU box, runs ai-toolkit there, and rsyncs the
+LoRA back — the local default is unchanged. Inference (the eval grid) goes to a
+remote ComfyUI just by pointing `APP_COMFY_URL` at it. See
+[Cloud GPU](CLOUD.md).
+
 ## Verification boundary
 
 Like the rest of the pipeline, the **logic** is built and unit-tested GPU-free: the

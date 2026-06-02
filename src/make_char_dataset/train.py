@@ -85,6 +85,8 @@ class TrainPlan:
     config_path: Path
     config_json: str
     output_path: Path
+    dataset_dir: Path  # local kohya dataset (source to upload for the ssh backend)
+    output_name: str  # LoRA stem / ai-toolkit run name
 
 
 class Trainer(Protocol):
@@ -157,16 +159,113 @@ class AiToolkitTrainer:
         return plan.output_path
 
 
+class SshAiToolkitTrainer:  # pragma: no cover - drives ssh/rsync to a remote GPU
+    """Run ai-toolkit on a remote GPU over SSH: upload dataset+config, run, fetch the LoRA.
+
+    Provider-agnostic — works with any rented box exposing SSH (RunPod / Vast.ai /
+    Lambda …). The remote is provisioned once (ai-toolkit + venv + HF login + the
+    FLUX.1-dev cache); see docs/architecture/CLOUD.md. The local path stays the default.
+    """
+
+    def __init__(
+        self, settings: Settings, on_progress: Callable[[TrainProgress], None] | None = None
+    ) -> None:
+        self._settings = settings
+        self._on_progress = on_progress
+
+    def train(self, plan: TrainPlan) -> Path:
+        """rsync the dataset + a remote-pathed config up, run ai-toolkit, rsync the LoRA back."""
+        import shlex
+        import subprocess  # nosec B404 - fixed argv, no shell
+
+        settings = self._settings
+        host = settings.train_ssh_host.strip()
+        port = settings.train_ssh_port
+        workdir = settings.train_ssh_workdir.rstrip("/")
+        dataset_name = plan.dataset_dir.name
+        remote_dataset = f"{workdir}/03_dataset/{dataset_name}"
+        remote_config = f"{workdir}/aitoolkit_config.json"
+        remote_log = f"{workdir}/train.log"
+        remote_run_dir = f"{workdir}/06_lora/{plan.output_name}"
+
+        def run(argv: list[str]) -> None:
+            print("+", shlex.join(argv))
+            subprocess.run(argv, check=True)  # nosec B603 - argv list, shell=False
+
+        run(build_ssh_command(host, f"mkdir -p {remote_dataset} {workdir}/06_lora", port=port))
+        run(
+            build_rsync_command(
+                f"{plan.dataset_dir.as_posix().rstrip('/')}/",
+                f"{host}:{remote_dataset}/",
+                port=port,
+                delete=True,
+            )
+        )
+        remote_config_json = rewrite_config_for_remote(
+            plan.config_json, remote_workdir=workdir, dataset_name=dataset_name
+        )
+        config_tmp = plan.config_path.parent / "aitoolkit_config.remote.json"
+        config_tmp.parent.mkdir(parents=True, exist_ok=True)
+        config_tmp.write_text(remote_config_json, encoding="utf-8")
+        run(build_rsync_command(config_tmp.as_posix(), f"{host}:{remote_config}", port=port))
+
+        ssh_run = build_ssh_command(
+            host,
+            remote_train_shell(
+                settings,
+                remote_config=remote_config,
+                remote_log=remote_log,
+                remote_run_dir=remote_run_dir,
+            ),
+            port=port,
+        )
+        print("+", shlex.join(ssh_run))
+        process = subprocess.Popen(  # nosec B603 - argv list, shell=False
+            ssh_run, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1
+        )
+        stdout = process.stdout
+        if stdout is None:
+            raise RuntimeError("failed to capture remote ai-toolkit output")
+        for line in stdout:
+            stripped = line.rstrip()
+            print(stripped)
+            progress = parse_progress(stripped)
+            if progress is not None and self._on_progress is not None:
+                self._on_progress(progress)
+        if process.wait() != 0:
+            raise RuntimeError(f"remote ai-toolkit training failed on {host} (see {remote_log}).")
+
+        plan.output_path.parent.mkdir(parents=True, exist_ok=True)
+        run(
+            build_rsync_command(
+                f"{host}:{remote_run_dir}/", f"{plan.output_path.parent.as_posix()}/", port=port
+            )
+        )
+        if not (plan.output_path.is_file() and plan.output_path.stat().st_size > 0):
+            raise RuntimeError(f"remote training finished but {plan.output_path} was not fetched.")
+        return plan.output_path
+
+
 def make_trainer(
     settings: Settings, on_progress: Callable[[TrainProgress], None] | None = None
 ) -> Trainer:
-    """Return the training backend for the configured tool (only ai-toolkit is wired)."""
+    """Return the training backend for the configured tool + backend (local or ssh)."""
     tool = settings.train_tool.strip().lower()
     if tool not in SUPPORTED_TOOLS:
         raise TrainError(
             f"train_tool={tool!r} is not supported; set APP_TRAIN_TOOL=ai-toolkit "
             f"(the only wired toolchain)."
         )
+    backend = settings.train_backend.strip().lower()
+    if backend == "ssh":
+        if not settings.train_ssh_host.strip():
+            raise TrainError(
+                "train_backend='ssh' needs APP_TRAIN_SSH_HOST "
+                "(user@host or an ~/.ssh/config alias)."
+            )
+        return SshAiToolkitTrainer(settings, on_progress=on_progress)
+    if backend != "local":
+        raise TrainError(f"train_backend={backend!r} is not supported; expected 'local' or 'ssh'.")
     return AiToolkitTrainer(hf_token=settings.huggingface_token, on_progress=on_progress)
 
 
@@ -387,6 +486,64 @@ def build_launch_command(
     return command
 
 
+# --- Pure: remote (ssh) launch helpers (no subprocess) ---------------------
+
+
+def resolve_ssh_python(settings: Settings) -> str:
+    """Remote interpreter for ai-toolkit — its venv on the remote box by default."""
+    if settings.train_ssh_python.strip():
+        return settings.train_ssh_python.strip()
+    return f"{settings.train_ssh_aitoolkit_dir.rstrip('/')}/venv/bin/python"
+
+
+def rewrite_config_for_remote(config_json: str, *, remote_workdir: str, dataset_name: str) -> str:
+    """Repoint the ai-toolkit config's paths at the remote workdir (pure).
+
+    Rewrites ``training_folder`` and the dataset ``folder_path`` to live under
+    ``remote_workdir`` on the GPU box; the rest of the recipe (qfloat8, trigger,
+    steps) is untouched. The local-resolved paths in ``config_json`` are replaced
+    (not re-resolved) because they must be valid on the *remote* filesystem.
+    """
+    workdir = remote_workdir.rstrip("/")
+    config = json.loads(config_json)
+    process = config["config"]["process"][0]
+    process["training_folder"] = f"{workdir}/06_lora"
+    process["datasets"][0]["folder_path"] = f"{workdir}/03_dataset/{dataset_name}"
+    return json.dumps(config, indent=2) + "\n"
+
+
+def build_ssh_command(host: str, remote_shell: str, *, port: int = 22) -> list[str]:
+    """``ssh [-p PORT] host '<remote_shell>'`` as an argv list (run locally, shell=False)."""
+    opts = [] if port == 22 else ["-p", str(port)]
+    return ["ssh", *opts, host, remote_shell]
+
+
+def build_rsync_command(src: str, dst: str, *, port: int = 22, delete: bool = False) -> list[str]:
+    """``rsync -az [--delete] [-e 'ssh -p PORT'] src dst`` argv (one side is ``host:path``)."""
+    command = ["rsync", "-az"]
+    if delete:
+        command.append("--delete")
+    if port != 22:
+        command += ["-e", f"ssh -p {port}"]
+    command += [src, dst]
+    return command
+
+
+def remote_train_shell(
+    settings: Settings, *, remote_config: str, remote_log: str, remote_run_dir: str
+) -> str:
+    """Remote shell line: clear the prior run dir, then run ai-toolkit on the config.
+
+    The ``rm -rf`` gives ai-toolkit a clean ``save_root`` so it does not resume from a
+    stale checkpoint (it has no resume-disable flag).
+    """
+    python = resolve_ssh_python(settings)
+    aitk = settings.train_ssh_aitoolkit_dir.rstrip("/")
+    return (
+        f"rm -rf {remote_run_dir} && cd {aitk} && {python} run.py {remote_config} -l {remote_log}"
+    )
+
+
 # --- Orchestration ---------------------------------------------------------
 
 
@@ -416,6 +573,8 @@ def build_plan(settings: Settings, *, dataset_dir: Path, output_dir: Path) -> Tr
         config_path=config_path,
         config_json=render_config(config),
         output_path=expected_output_path(output_dir, output_name),
+        dataset_dir=dataset_dir,
+        output_name=output_name,
     )
 
 
