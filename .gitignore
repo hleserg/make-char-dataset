@@ -43,3 +43,6 @@ htmlcov/
 # Claude Code: personal/local settings (machine-specific hooks live here). The
 # shared allowlist in .claude/settings.json IS committed; local overrides are not.
 .claude/settings.local.json
+
+# coverage annotate artifacts
+*.py,cover
