@@ -126,7 +126,8 @@ class Settings(BaseSettings):
     include_rejected: bool = Field(
         default=False,
         description="Include the passport's rejected/ attempts as augmentation (off: they are "
-        "failed frames). Golden anchors are always used and are exempt from dedup.",
+        "failed frames). Golden anchors are used as generation conditioning, never "
+        "added to the training set (conditioning-only doctrine).",
     )
 
     # --- Pipeline: stage flags (gate which stages 'run-all' executes) ---

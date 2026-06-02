@@ -176,9 +176,14 @@ def assemble_dataset(
     """Lay out a kohya-ready training folder from generated ``variants``.
 
     Near-duplicate ``variants`` (by perceptual hash) are moved to
-    ``manual_review/`` — never deleted. ``anchors`` (the golden passport set) are
-    written through unconditionally and are **exempt from dedup**: the project
-    doctrine is that every incoming golden image is used.
+    ``manual_review/`` — never deleted.
+
+    ``anchors`` is an **opt-in primitive**, not the default route. Under the
+    project's *conditioning-only* doctrine the golden passport set feeds the
+    generate stage as img2img/ControlNet references and is kept OUT of the
+    training set (its shared grey-studio background + neutral expression would
+    bind those to identity). When supplied, ``anchors`` are written through
+    unconditionally and exempt from dedup; the default pipeline supplies none.
 
     Writes ``<repeats>_<trigger>/`` with a ``.png`` per kept image and a matching
     ``.txt`` caption sidecar, using deterministic names so re-runs overwrite

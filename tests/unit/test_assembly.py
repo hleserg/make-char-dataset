@@ -50,6 +50,12 @@ def test_build_character_caption_trigger_first_and_style_stripped() -> None:
 
 
 def test_assemble_dataset_lays_out_kohya_folder_with_anchors_exempt(tmp_path: Path) -> None:
+    """Exercise the opt-in ``anchors=`` primitive (dedup-exempt pass-through).
+
+    This is NOT the default route: under the conditioning-only doctrine the
+    pipeline passes no anchors, so the golden passport set stays out of the
+    training set. The primitive is verified here so generators can opt in later.
+    """
     ws = Workspace(tmp_path)
     gen = StubGenerator(duplicate_of={3: 0})
     variant_paths = generate_variants(gen, 4, ws.generated)

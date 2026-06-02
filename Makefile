@@ -26,9 +26,11 @@ fmt-check: ## Ruff format (check only)
 type: ## Pyright type check
 	$(PY) pyright
 
+# pip-audit: try the configured PyPI service, then fall back to OSV (osv.dev, a
+# superset advisory DB: PYSEC+GHSA+more) when PyPI is unreachable (sandboxed dev).
 security: ## Bandit + pip-audit
 	$(PY) bandit -c pyproject.toml -r src/ -q
-	$(PY) pip-audit
+	$(PY) pip-audit || $(PY) pip-audit --vulnerability-service osv
 
 test: ## Full test suite with coverage gate
 	$(PY) pytest --cov --cov-fail-under=90
