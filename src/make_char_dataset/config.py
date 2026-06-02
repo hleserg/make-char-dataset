@@ -60,6 +60,11 @@ class Settings(BaseSettings):
         ge=1,
         description="kohya repeat count; the dataset folder is named '<repeats>_<trigger>'.",
     )
+    keep_tokens: int = Field(
+        default=1,
+        ge=0,
+        description="kohya keep_tokens: leading caption tokens (the trigger) pinned in shuffle.",
+    )
 
     # --- Pipeline: generation backend (heavy; injected behind a Protocol) ---
     backend: str = Field(
