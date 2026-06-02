@@ -42,10 +42,16 @@ into ~30–40 diverse, in-style variants locally.
   that reads the environment.
 - **workspace** — single-root derived directory contract
   (`src/make_char_dataset/workspace.py`).
-- **assembly** — pure dataset core: the `Generator` Protocol, perceptual-hash
-  dedup, Character-Locker captioning, kohya layout (`assembly.py`). The heavy
-  generation/captioning backends are injected behind Protocols and imported
-  lazily, so the CPU/CI path never pulls torch/diffusers/onnxruntime.
+- **assembly** — pure dataset core: perceptual-hash dedup, Character-Locker
+  caption primitive, kohya layout (`assembly.py`).
+- **stages** — one module per stage, building on the core: `ingest` (passport →
+  `00_passport_import`), `generate` (anchors → variants, `GenerationBackend` +
+  `backends/comfy.py`), `caption` (clean/dedup + Character-Locker layout) with
+  `tagging` (`Tagger` Protocol → WD14). The heavy generation/captioning backends
+  are injected behind Protocols and imported lazily, so the CPU/CI path never pulls
+  torch/diffusers/onnxruntime.
+- **orchestrate / cli** — `orchestrate.run_all` chains the stages (resumable,
+  flag-gated); `cli.py` is the thin `make-char-dataset` console entry.
 - **observability** — Sentry init (`send_default_pii=False`) + component tagging.
 
 ## Data flow
@@ -64,3 +70,22 @@ flowchart LR
 Each stage writes a `.stage_complete` marker into its output folder on success and
 is skipped on re-runs unless `--force`. Stage enable flags (`APP_RUN_*`) gate which
 stages `run-all` executes. See `docs/architecture/WORKSPACE.md`.
+
+## Running
+
+```bash
+# whole pipeline (import -> generate -> clean -> caption), resumable:
+make-char-dataset run-all path/to/<character_id> --trigger kael --repeats 10
+# or a single stage:
+make-char-dataset generate            # uses 00_passport_import already on disk
+make-char-dataset run-all path/to/export --force   # re-run every enabled stage
+```
+
+CI runs the whole pipeline hermetically on the stub backends (`APP_BACKEND=stub`,
+the `StubTagger`) — no GPU, no network. The **heavy tier** (real ComfyUI img2img +
+ControlNet + style LoRA, WD14 tagger; all human-provided inputs, HLE-759) is built
+with `docker build --build-arg GPU=1` and run against a real create-char-passport
+export. A genuine `kael-thornwood` passport fixture (`state.json` + 5 role-tagged
+`refs/`) is kept out-of-repo for that end-to-end run; the free verifier
+(`.claude/skills/verifier-dataset/smoke.py`) exercises the same `00→01→02→03`
+contract on a synthetic export every PR.
