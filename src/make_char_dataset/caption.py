@@ -5,15 +5,17 @@ of the **generated variants only** (golden anchors are conditioning-only and nev
 entered the pipeline here). Too-small / near-duplicate frames are copied to
 ``manual_review/`` (never deleted; ``01_generated/`` is left intact).
 
-caption: ``02_clean/`` -> ``03_dataset/<repeats>_<trigger>/`` — WD14-tag each image,
-build a **Character-Locker** caption (trigger first; identity geometry stripped so it
-binds to the trigger, style tokens stripped because style lives in the external LoRA),
-and lay out kohya ``image`` + ``.txt`` pairs via :func:`assembly.assemble_dataset`.
-An opt-in regularization track lays out trigger-free class images.
+caption: ``02_clean/`` -> ``03_dataset/<repeats>_<trigger>/`` — caption each image
+**trigger-first**, describing only what varies and omitting the invariant identity (so
+it binds to the trigger) and the art style (it lives in the external LoRA), then lay
+out kohya ``image`` + ``.txt`` pairs via :func:`assembly.assemble_dataset`. An opt-in
+regularization track lays out trigger-free class images.
 
-Builds on the pure ``assembly`` core; the heavy WD14 tagger is injected behind the
-:class:`make_char_dataset.tagging.Tagger` Protocol and lazy-imported, so this stage
-and its tests stay torch/onnxruntime-free.
+Captioning is pluggable behind the :class:`Captioner` seam: **VLM prose** (Gemini via
+the proxy Space; the default, best for Flux's T5 and far better at not leaking the
+wrong thing into the trigger), the legacy **WD14** tagger + Character-Locker
+(``APP_CAPTIONER=wd14``), or a network-free :class:`StubCaptioner` for CI. The heavy
+backends are lazy-imported, so this stage and its tests stay torch/onnxruntime/network-free.
 """
 
 from __future__ import annotations
@@ -21,8 +23,10 @@ from __future__ import annotations
 import json
 import shutil
 from collections.abc import Iterable, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Protocol, runtime_checkable
 
 from PIL import Image
 
@@ -33,8 +37,8 @@ from make_char_dataset.assembly import (
     build_character_caption,
     dedup_by_phash,
 )
-from make_char_dataset.config import get_settings
-from make_char_dataset.tagging import StubTagger, Tagger
+from make_char_dataset.config import Settings, get_settings
+from make_char_dataset.tagging import Tagger
 from make_char_dataset.workspace import Workspace
 
 CLEAN_MANIFEST = "clean.json"
@@ -200,6 +204,50 @@ def character_locker_caption(
     return build_character_caption(trigger, content)
 
 
+# --- Captioner seam: VLM prose (default), WD14 (flagged fallback), or a stub -----
+
+
+@runtime_checkable
+class Captioner(Protocol):
+    """Produces one trigger-first caption string for an image."""
+
+    def caption(self, image: Path) -> str:
+        """Return the caption text for ``image`` (begins with the character trigger)."""
+        ...
+
+
+@dataclass
+class Wd14Captioner:
+    """Legacy captioner: WD14 tags → Character-Locker caption (behind ``APP_CAPTIONER=wd14``)."""
+
+    tagger: Tagger
+    trigger: str
+    style: tuple[str, ...] = ()
+
+    def caption(self, image: Path) -> str:
+        """Tag ``image`` and build a geometry/style-stripped Character-Locker caption."""
+        return character_locker_caption(self.trigger, self.tagger.tag(image), style=self.style)
+
+
+@dataclass
+class StubCaptioner:
+    """Deterministic, network-free :class:`Captioner` for tests and the verifier smoke.
+
+    Emits trigger-first content-only prose that varies per image and contains no
+    style/medium or identity-geometry tokens — so the Character-Locker invariants
+    still hold without calling the VLM proxy.
+    """
+
+    trigger: str
+
+    def caption(self, image: Path) -> str:
+        """Return a fixed trigger-first prose caption, distinguished by the image stem."""
+        return (
+            f"{self.trigger}, standing in a plain setting, relaxed pose, full-body shot, "
+            f"even lighting ({image.stem})"
+        )
+
+
 def _clear_files(out: Path) -> None:
     """Remove the flat files this stage owns before a rebuild (files only)."""
     for child in out.iterdir():
@@ -281,21 +329,22 @@ def clean_variants(
 
 def caption_dataset(
     workspace: Workspace,
-    tagger: Tagger,
+    captioner: Captioner,
     *,
     trigger: str,
     repeats: int,
-    style_prompt: str = "",
     keep_tokens: int = 1,
+    max_workers: int = 1,
     force: bool = False,
 ) -> AssemblyResult:
-    """Tag the cleaned variants and lay out a kohya ``03_dataset/<repeats>_<trigger>/``.
+    """Caption the cleaned variants and lay out a kohya ``03_dataset/<repeats>_<trigger>/``.
 
-    Each ``02_clean`` image is WD14-tagged, captioned Character-Locker style (trigger
-    first, geometry + style stripped), and written with a ``.txt`` sidecar via
-    :func:`assembly.assemble_dataset`. Dedup is **not** re-run here (the clean stage
-    owns it), so the read-only ``02_clean`` input is never mutated. Idempotent: a
-    complete prior layout is returned as-is; ``kept`` is the laid-out image paths.
+    Each ``02_clean`` image is captioned by ``captioner`` (VLM prose by default;
+    trigger-first, identity + style omitted) and written with a ``.txt`` sidecar via
+    :func:`assembly.assemble_dataset`. Captioning runs concurrently (``max_workers``)
+    while preserving order; a captioner error aborts the stage. Dedup is **not** re-run
+    here (the clean stage owns it), so the read-only ``02_clean`` input is never
+    mutated. Idempotent: a complete prior layout is returned as-is.
     """
     images = sorted(workspace.clean.glob("var_*.png"))
     if not images:
@@ -316,11 +365,11 @@ def caption_dataset(
                 training_dir=training_dir, kept=existing, deduped=[], anchors_used=0
             )
 
-    style = style_tokens(style_prompt)
-    variants = [
-        Variant(image, character_locker_caption(trigger, tagger.tag(image), style=style))
-        for image in images
-    ]
+    # Caption concurrently (VLM is network-bound); pool.map preserves order and
+    # propagates the first captioner error so a failed caption aborts the stage.
+    with ThreadPoolExecutor(max_workers=max(1, max_workers)) as pool:
+        captions = list(pool.map(captioner.caption, images))
+    variants = [Variant(image, caption) for image, caption in zip(images, captions, strict=True)]
 
     training_dir.mkdir(parents=True, exist_ok=True)
     _clear_files(training_dir)
@@ -383,15 +432,78 @@ def run_clean(*, force: bool = False) -> CleanResult:
     )
 
 
-def run_caption(*, tagger: Tagger | None = None, force: bool = False) -> AssemblyResult:
-    """Settings-driven caption stage (defaults to the GPU-free StubTagger)."""
+def _resolve_hf_token(settings: Settings) -> str:
+    """HF token for the proxy: ``HF_TOKEN`` setting, else the CLI login cache file.
+
+    Either token can *call* the proxy (read scope is enough); the write token is only
+    needed to push to the Space. Reading the cache file is a filesystem read, not an
+    ``os.environ`` read, so it does not break the env-access rule.
+    """
+    token = settings.huggingface_token.strip()
+    if token:
+        return token
+    cache = Path.home() / ".cache" / "huggingface" / "token"
+    try:
+        cached = cache.read_text(encoding="utf-8").strip()
+    except OSError:
+        cached = ""
+    if not cached:
+        raise CaptionError(
+            "no HF token for the Gemini proxy: set HF_TOKEN (read access to the proxy Space) "
+            "in .env, or run `huggingface-cli login`."
+        )
+    return cached
+
+
+def _make_captioner(settings: Settings) -> Captioner:
+    """Build the configured captioner (heavy VLM/WD14 backends imported lazily)."""
+    backend = settings.captioner.strip().lower()
+    if backend == "stub":
+        return StubCaptioner(settings.trigger_token)
+    if backend == "wd14":
+        if not settings.wd14_model_path or not settings.wd14_labels_path:
+            raise CaptionError(
+                "APP_CAPTIONER=wd14 needs APP_WD14_MODEL_PATH and APP_WD14_LABELS_PATH "
+                "(the WD14 ONNX model + selected_tags.csv). Use APP_CAPTIONER=vlm (the "
+                "default) or provide the WD14 paths."
+            )
+        from make_char_dataset.tagging import WD14Tagger
+
+        return Wd14Captioner(
+            WD14Tagger(
+                model_path=settings.wd14_model_path,
+                labels_path=settings.wd14_labels_path,
+                threshold=settings.wd14_threshold,
+            ),
+            settings.trigger_token,
+            style_tokens(settings.style_prompt),
+        )
+    if backend == "vlm":
+        from make_char_dataset.proxy import GeminiProxyClient
+        from make_char_dataset.vlm_caption import VlmCaptioner
+
+        client = GeminiProxyClient(_resolve_hf_token(settings), url=settings.vlm_proxy_url)
+        return VlmCaptioner(
+            client,
+            trigger=settings.trigger_token,
+            model=settings.vlm_model,
+            max_side=settings.vlm_max_image_side,
+        )
+    raise CaptionError(f"unknown captioner {backend!r}; expected 'vlm', 'wd14', or 'stub'.")
+
+
+def run_caption(*, captioner: Captioner | None = None, force: bool = False) -> AssemblyResult:
+    """Settings-driven caption stage (VLM prose by default; CI/tests inject a stub)."""
     settings = get_settings()
+    cap = captioner if captioner is not None else _make_captioner(settings)
+    # Only the network-bound VLM benefits from concurrency; keep WD14/stub serial.
+    max_workers = settings.vlm_concurrency if settings.captioner.strip().lower() == "vlm" else 1
     return caption_dataset(
         Workspace(settings.workspace),
-        tagger or StubTagger(),
+        cap,
         trigger=settings.trigger_token,
         repeats=settings.dataset_repeats,
         keep_tokens=settings.keep_tokens,
-        style_prompt=settings.style_prompt,
+        max_workers=max_workers,
         force=force,
     )

@@ -33,7 +33,7 @@ into ~30–40 diverse, in-style variants locally.
 | import | `00_passport_import/` | read a passport `state.json`, walk its pointers, role-tag + normalize the golden anchors |
 | generate | `01_generated/` | multiply anchors into variants via the injected backend (ComfyUI/diffusers + style LoRA) |
 | clean | `02_clean/` | perceptual-hash dedup + size filter of the generated variants (anchors never enter this stage — they are generation conditioning only) |
-| caption + layout | `03_dataset/<repeats>_<trigger>/` | Character-Locker captions + kohya folder with `.txt` sidecars |
+| caption + layout | `03_dataset/<repeats>_<trigger>/` | trigger-first captions (VLM prose by default) + kohya folder with `.txt` sidecars |
 | train *(opt-in)* | `06_lora/<name>/` | train the character LoRA on Flux.1-dev via ai-toolkit (off by default) |
 | — | `manual_review/` | anything kicked out for a human (near-dups, out-of-spec) |
 
@@ -47,10 +47,12 @@ into ~30–40 diverse, in-style variants locally.
   caption primitive, kohya layout (`assembly.py`).
 - **stages** — one module per stage, building on the core: `ingest` (passport →
   `00_passport_import`), `generate` (anchors → variants, `GenerationBackend` +
-  `backends/comfy.py`), `caption` (clean/dedup + Character-Locker layout) with
-  `tagging` (`Tagger` Protocol → WD14). The heavy generation/captioning backends
-  are injected behind Protocols and imported lazily, so the CPU/CI path never pulls
-  torch/diffusers/onnxruntime.
+  `backends/comfy.py`), `caption` (clean/dedup + kohya layout) with a pluggable
+  `Captioner` seam — **VLM prose** via the Gemini `proxy` (`vlm_caption.py`, the
+  default), the legacy WD14 `tagging` (`Tagger` Protocol), or a stub. The heavy
+  generation/captioning backends are injected behind Protocols and imported lazily,
+  so the CPU/CI path never pulls torch/diffusers/onnxruntime/the network. See
+  [Captioning](CAPTIONING.md).
 - **train** *(opt-in)* — `train.py` trains the character LoRA from `03_dataset`
   into `06_lora/` by shelling out to **ai-toolkit** (not kohya: only it can
   qfloat8-quantize the Flux base to fit ~16 GB). Pure config/launch/progress

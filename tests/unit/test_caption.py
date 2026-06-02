@@ -1,6 +1,6 @@
-"""Tests for make_char_dataset.caption (clean dedup + Character-Locker layout).
+"""Tests for make_char_dataset.caption (clean dedup + captioner layout).
 
-Hermetic: synthetic images + the StubTagger; no onnxruntime, no GPU, no network.
+Hermetic: synthetic images + the StubCaptioner; no onnxruntime, no GPU, no network.
 """
 
 from __future__ import annotations
@@ -14,6 +14,10 @@ from PIL import Image
 from make_char_dataset.assembly import StubGenerator
 from make_char_dataset.caption import (
     CaptionError,
+    StubCaptioner,
+    Wd14Captioner,
+    _make_captioner,
+    _resolve_hf_token,
     caption_dataset,
     character_locker_caption,
     clean_variants,
@@ -118,9 +122,7 @@ def test_caption_lays_out_kohya_pairs(tmp_path: Path) -> None:
     ws = Workspace(tmp_path / "ws")
     _seed_clean(ws, 3)
 
-    result = caption_dataset(
-        ws, StubTagger(), trigger="kael", repeats=10, style_prompt="comic style"
-    )
+    result = caption_dataset(ws, StubCaptioner("kael"), trigger="kael", repeats=10)
 
     assert result.training_dir == ws.dataset / "10_kael"
     images = sorted(result.training_dir.glob("*.png"))
@@ -130,7 +132,7 @@ def test_caption_lays_out_kohya_pairs(tmp_path: Path) -> None:
         assert sidecar.is_file()
         caption = sidecar.read_text(encoding="utf-8")
         assert caption.split(",")[0].strip() == "kael"  # trigger first
-        assert "brown hair" not in caption and "comic style" not in caption  # filtered
+        assert "brown hair" not in caption and "comic style" not in caption  # no id/style
     manifest = json.loads((result.training_dir / "dataset.json").read_text(encoding="utf-8"))
     assert manifest["trigger"] == "kael" and manifest["keep_tokens"] == 1
 
@@ -138,20 +140,20 @@ def test_caption_lays_out_kohya_pairs(tmp_path: Path) -> None:
 def test_caption_requires_clean(tmp_path: Path) -> None:
     ws = Workspace(tmp_path / "ws")
     with pytest.raises(CaptionError, match="clean stage first"):
-        caption_dataset(ws, StubTagger(), trigger="kael", repeats=10)
+        caption_dataset(ws, StubCaptioner("kael"), trigger="kael", repeats=10)
 
 
 def test_caption_idempotent_and_force(tmp_path: Path) -> None:
     ws = Workspace(tmp_path / "ws")
     _seed_clean(ws, 3)
-    first = caption_dataset(ws, StubTagger(), trigger="kael", repeats=10)
+    first = caption_dataset(ws, StubCaptioner("kael"), trigger="kael", repeats=10)
     sample = sorted(first.training_dir.glob("*.png"))[0]
     mtime = sample.stat().st_mtime_ns
 
-    caption_dataset(ws, StubTagger(), trigger="kael", repeats=10)  # skip
+    caption_dataset(ws, StubCaptioner("kael"), trigger="kael", repeats=10)  # skip
     assert sample.stat().st_mtime_ns == mtime
 
-    forced = caption_dataset(ws, StubTagger(), trigger="kael", repeats=10, force=True)
+    forced = caption_dataset(ws, StubCaptioner("kael"), trigger="kael", repeats=10, force=True)
     assert len(forced.kept) == 3
 
 
@@ -186,13 +188,14 @@ def test_run_clean_and_run_caption_use_settings(
     monkeypatch.setenv("APP_TRIGGER_TOKEN", "kael")
     monkeypatch.setenv("APP_DATASET_REPEATS", "12")
     monkeypatch.setenv("APP_MIN_SIDE_PX", "16")
+    monkeypatch.setenv("APP_CAPTIONER", "stub")  # GPU/network-free captioner for CI
     get_settings.cache_clear()
     ws = Workspace(tmp_path / "ws")
     _seed_generated(ws)
 
     clean = run_clean()
     assert len(clean.kept) == 4
-    result = run_caption()  # defaults to the StubTagger
+    result = run_caption()  # settings-selected captioner (stub here)
     assert result.training_dir == ws.dataset / "12_kael"
     assert len(result.kept) == 4
 
@@ -234,7 +237,7 @@ def test_caption_does_not_mutate_clean(tmp_path: Path) -> None:
     stub.generate(7, ws.clean / "var_000.png")
     stub.generate(7, ws.clean / "var_001.png")  # byte-identical -> within dedup distance
 
-    result = caption_dataset(ws, StubTagger(), trigger="kael", repeats=10)
+    result = caption_dataset(ws, StubCaptioner("kael"), trigger="kael", repeats=10)
 
     # caption never re-dedups, so neither file is moved out of the read-only 02_clean
     assert (ws.clean / "var_000.png").is_file() and (ws.clean / "var_001.png").is_file()
@@ -244,10 +247,10 @@ def test_caption_does_not_mutate_clean(tmp_path: Path) -> None:
 def test_caption_self_heals_missing_pair(tmp_path: Path) -> None:
     ws = Workspace(tmp_path / "ws")
     _seed_clean(ws, 3)
-    first = caption_dataset(ws, StubTagger(), trigger="kael", repeats=10)
+    first = caption_dataset(ws, StubCaptioner("kael"), trigger="kael", repeats=10)
     sorted(first.training_dir.glob("*.png"))[0].unlink()  # delete a png, keep the marker
 
-    healed = caption_dataset(ws, StubTagger(), trigger="kael", repeats=10)  # rebuild
+    healed = caption_dataset(ws, StubCaptioner("kael"), trigger="kael", repeats=10)  # rebuild
     images = sorted(healed.training_dir.glob("*.png"))
     assert len(images) == 3 and all(image.with_suffix(".txt").is_file() for image in images)
 
@@ -266,29 +269,29 @@ def test_clean_self_heals_missing_kept_file(tmp_path: Path) -> None:
 def test_caption_self_heals_on_corrupt_dataset_manifest(tmp_path: Path) -> None:
     ws = Workspace(tmp_path / "ws")
     _seed_clean(ws, 3)
-    first = caption_dataset(ws, StubTagger(), trigger="kael", repeats=10)
+    first = caption_dataset(ws, StubCaptioner("kael"), trigger="kael", repeats=10)
     (first.training_dir / "dataset.json").write_text("{ broken", encoding="utf-8")
 
-    healed = caption_dataset(ws, StubTagger(), trigger="kael", repeats=10)  # rebuild
+    healed = caption_dataset(ws, StubCaptioner("kael"), trigger="kael", repeats=10)  # rebuild
     assert len(sorted(healed.training_dir.glob("*.png"))) == 3
 
 
 def test_caption_force_preserves_subdirectories(tmp_path: Path) -> None:
     ws = Workspace(tmp_path / "ws")
     _seed_clean(ws, 2)
-    result = caption_dataset(ws, StubTagger(), trigger="kael", repeats=10)
+    result = caption_dataset(ws, StubCaptioner("kael"), trigger="kael", repeats=10)
     keep = result.training_dir / "keep"
     keep.mkdir()
     (keep / "x.txt").write_text("x", encoding="utf-8")
 
-    caption_dataset(ws, StubTagger(), trigger="kael", repeats=10, force=True)
+    caption_dataset(ws, StubCaptioner("kael"), trigger="kael", repeats=10, force=True)
     assert keep.is_dir()  # clear is files-only
 
 
 def test_keep_tokens_recorded(tmp_path: Path) -> None:
     ws = Workspace(tmp_path / "ws")
     _seed_clean(ws, 2)
-    result = caption_dataset(ws, StubTagger(), trigger="kael", repeats=10, keep_tokens=2)
+    result = caption_dataset(ws, StubCaptioner("kael"), trigger="kael", repeats=10, keep_tokens=2)
     manifest = json.loads((result.training_dir / "dataset.json").read_text(encoding="utf-8"))
     assert manifest["keep_tokens"] == 2
 
@@ -300,3 +303,104 @@ def test_pure_core_no_onnxruntime_import() -> None:
 
     for heavy in ("torch", "onnxruntime"):
         assert heavy not in sys.modules
+
+
+# --- captioner seam: stub / WD14 / VLM selection -----------------------------
+
+
+def _settings(monkeypatch: pytest.MonkeyPatch, **env: str):
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+    get_settings.cache_clear()
+    return get_settings()
+
+
+def test_stub_captioner_trigger_first_and_clean(tmp_path: Path) -> None:
+    img = tmp_path / "var_007.png"
+    StubGenerator().generate(7, img)
+    caption = StubCaptioner("kael_char").caption(img)
+    assert caption.startswith("kael_char,")  # trigger first
+    assert "var_007" in caption  # varies per image
+    for banned in ("comic", "painterly", "brown hair", "green eyes"):
+        assert banned not in caption  # no style / identity geometry
+
+
+def test_wd14_captioner_uses_character_locker(tmp_path: Path) -> None:
+    img = tmp_path / "var_000.png"
+    StubGenerator().generate(0, img)
+    caption = Wd14Captioner(StubTagger(), "kael", style=("comic style",)).caption(img)
+    assert caption.split(",")[0].strip() == "kael"
+    assert "brown hair" not in caption and "comic style" not in caption  # geometry + style out
+    assert "standing" in caption  # content kept
+
+
+def test_make_captioner_stub(monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = _settings(monkeypatch, APP_CAPTIONER="stub", APP_TRIGGER_TOKEN="kael")
+    assert isinstance(_make_captioner(settings), StubCaptioner)
+
+
+def test_make_captioner_wd14(monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = _settings(
+        monkeypatch,
+        APP_CAPTIONER="wd14",
+        APP_WD14_MODEL_PATH="/models/wd14.onnx",
+        APP_WD14_LABELS_PATH="/models/selected_tags.csv",
+    )
+    assert isinstance(_make_captioner(settings), Wd14Captioner)
+
+
+def test_make_captioner_wd14_requires_paths(monkeypatch: pytest.MonkeyPatch) -> None:
+    # wd14 without the human-provided model/labels paths must fail clearly, not crash
+    # later inside onnxruntime.
+    settings = _settings(monkeypatch, APP_CAPTIONER="wd14")
+    with pytest.raises(CaptionError, match="APP_WD14_MODEL_PATH"):
+        _make_captioner(settings)
+
+
+def test_make_captioner_vlm(monkeypatch: pytest.MonkeyPatch) -> None:
+    from make_char_dataset.vlm_caption import VlmCaptioner
+
+    settings = _settings(monkeypatch, APP_CAPTIONER="vlm", HF_TOKEN="hf_read_tok")
+    assert isinstance(_make_captioner(settings), VlmCaptioner)
+
+
+def test_make_captioner_unknown_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = _settings(monkeypatch, APP_CAPTIONER="bogus")
+    with pytest.raises(CaptionError, match="unknown captioner"):
+        _make_captioner(settings)
+
+
+def test_resolve_hf_token_prefers_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    assert _resolve_hf_token(_settings(monkeypatch, HF_TOKEN="from_env")) == "from_env"
+
+
+def test_resolve_hf_token_falls_back_to_cache(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    home = tmp_path / "home"
+    (home / ".cache" / "huggingface").mkdir(parents=True)
+    (home / ".cache" / "huggingface" / "token").write_text("cached_tok\n", encoding="utf-8")
+    monkeypatch.setattr(Path, "home", lambda: home)
+    settings = _settings(monkeypatch, APP_HUGGINGFACE_TOKEN="")
+    assert _resolve_hf_token(settings) == "cached_tok"
+
+
+def test_resolve_hf_token_missing_raises(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "empty_home")
+    settings = _settings(monkeypatch, APP_HUGGINGFACE_TOKEN="")
+    with pytest.raises(CaptionError, match="no HF token"):
+        _resolve_hf_token(settings)
+
+
+def test_caption_dataset_propagates_captioner_error(tmp_path: Path) -> None:
+    ws = Workspace(tmp_path / "ws")
+    _seed_clean(ws, 2)
+
+    class BoomCaptioner:
+        def caption(self, image: Path) -> str:
+            raise RuntimeError("vlm down")
+
+    with pytest.raises(RuntimeError, match="vlm down"):
+        caption_dataset(ws, BoomCaptioner(), trigger="kael", repeats=10)

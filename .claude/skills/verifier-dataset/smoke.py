@@ -18,6 +18,9 @@ from __future__ import annotations
 
 from harness import Check, build_sample_pipeline, make_workspace, report
 
+from make_char_dataset.caption import Wd14Captioner, style_tokens
+from make_char_dataset.tagging import StubTagger
+
 
 def run(check: Check) -> None:
     """Assert the full conditioning-only pipeline contract against a stub sample."""
@@ -86,11 +89,38 @@ def run(check: Check) -> None:
         "every caption starts with the character trigger token",
     )
 
-    # 8) NO style or identity-geometry tokens leaked into captions (Character-Locker)
-    banned = ["comic style", "brown hair", "1boy"]  # StubTagger emits these; must be stripped
-    bled = sorted({tok for tok in banned for t in texts if tok in t.lower()})
+    # 8a) the laid-out captions (default StubCaptioner prose) carry no style/medium or
+    #     identity-geometry words — guards the default VLM/stub captioner output.
+    banned_words = [
+        "comic",
+        "painterly",
+        "watercolor",
+        "brown hair",
+        "blonde",
+        "green eyes",
+        "muscular",
+    ]
+    bled = sorted({w for w in banned_words for t in texts if w in t.lower()})
     check.expect(
-        not bled, f"no style/geometry tokens in captions (Character-Locker); leaked={bled}"
+        not bled,
+        f"default captions carry no style/identity words (Character-Locker); leaked={bled}",
+    )
+
+    # 8b) Character-Locker stripping on the WD14 fallback path: StubTagger DOES emit
+    #     geometry + style tags ('brown hair', '1boy', 'comic style'); the WD14
+    #     captioner must strip them and keep the trigger first. (The default VLM/stub
+    #     path omits them by prompt, so this exercises the actual stripping logic.)
+    sample_image = sorted(workspace.clean.glob("var_*.png"))[0]
+    wd14_caption = (
+        Wd14Captioner(StubTagger(), sample.trigger, style_tokens("")).caption(sample_image).lower()
+    )
+    check.expect(
+        all(tok not in wd14_caption for tok in ("comic style", "brown hair", "1boy")),
+        "Character-Locker: WD14 captioner strips style + identity-geometry tags",
+    )
+    check.expect(
+        wd14_caption.split(",")[0].strip() == sample.trigger,
+        "Character-Locker: WD14 caption begins with the trigger token",
     )
 
     # 9) the planted near-duplicate was routed to manual_review (never deleted)

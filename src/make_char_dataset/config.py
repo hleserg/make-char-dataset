@@ -140,6 +140,51 @@ class Settings(BaseSettings):
         "added to the training set (conditioning-only doctrine).",
     )
 
+    # --- Pipeline: captioning (VLM prose by default) ---
+    # The caption stage describes only what VARIES (pose/outfit/expression/bg/shot)
+    # and omits the invariant identity + the art style, so identity binds to the
+    # <char>_char trigger and style stays with the external cmcstyle LoRA. VLM prose
+    # (Gemini via the proxy Space) is the default; WD14 tagging is a flagged fallback.
+    captioner: str = Field(
+        default="vlm",
+        description="Captioning backend: 'vlm' (Gemini prose via the proxy; default), "
+        "'wd14' (legacy booru tagger + Character-Locker), or 'stub' (deterministic, no "
+        "network — used by tests/CI).",
+    )
+    vlm_model: str = Field(
+        default="gemini-2.5-flash",
+        description="Gemini model for VLM captioning (agent default; the UI button uses pro).",
+    )
+    vlm_concurrency: int = Field(
+        default=8,
+        ge=1,
+        le=16,
+        description="Concurrent proxy caption requests (the proxy Space queue limit is 16).",
+    )
+    vlm_max_image_side: int = Field(
+        default=768,
+        ge=64,
+        description="Downscale each image to this longest side before captioning. Full-res "
+        "(1024+) bodies time out the proxy upload; 768 keeps it fast and is plenty for a VLM.",
+    )
+    vlm_proxy_url: str = Field(
+        default="https://hleserg-proxy-gemini-api.hf.space/gradio_api/call/caption",
+        description="Gradio endpoint of the Gemini proxy Space (Gemini is geo-blocked here, so "
+        "every call is relayed through it).",
+    )
+    # WD14 fallback (only when APP_CAPTIONER=wd14): the ONNX model + label CSV are
+    # human-provided (HLE-759) and have no defaults, so the stage fails clearly if
+    # wd14 is selected without them rather than crashing deep in onnxruntime.
+    wd14_model_path: str = Field(
+        default="", description="WD14 ONNX model path (required when APP_CAPTIONER=wd14)."
+    )
+    wd14_labels_path: str = Field(
+        default="", description="WD14 selected_tags.csv path (required when APP_CAPTIONER=wd14)."
+    )
+    wd14_threshold: float = Field(
+        default=0.35, ge=0.0, le=1.0, description="WD14 general-tag confidence cutoff."
+    )
+
     # --- Pipeline: char-LoRA training (heavy; opt-in; runs via ai-toolkit) ---
     # The char-LoRA trains on Flux.1-dev so it stacks with the cmcstyle style LoRA
     # (`Flux + cmcstyle + <char>_char`, HLE-802). Training shells out to ostris

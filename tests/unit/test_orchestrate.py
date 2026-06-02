@@ -42,6 +42,7 @@ def _make_export(root: Path) -> Path:
 def _configure(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, **extra: str) -> Workspace:
     monkeypatch.setenv("APP_WORKSPACE", str(tmp_path / "ws"))
     monkeypatch.setenv("APP_BACKEND", "stub")
+    monkeypatch.setenv("APP_CAPTIONER", "stub")  # GPU/network-free captioner for CI
     monkeypatch.setenv("APP_VARIANTS_PER_CHARACTER", "6")
     monkeypatch.setenv("APP_MIN_SIDE_PX", "16")
     monkeypatch.setenv("APP_TRIGGER_TOKEN", "conan")
