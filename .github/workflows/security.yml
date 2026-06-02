@@ -22,6 +22,8 @@ jobs:
           enable-cache: true
       - run: uv sync --all-extras
       - name: Dependency audit (pip-audit)
-        run: uv run pip-audit
+        # Try the PyPI advisory service; fall back to OSV (osv.dev, a superset DB)
+        # if PyPI is unreachable, so the audit is resilient to registry outages.
+        run: uv run pip-audit || uv run pip-audit --vulnerability-service osv
       - name: Static security (bandit)
         run: uv run bandit -c pyproject.toml -r src/ -q

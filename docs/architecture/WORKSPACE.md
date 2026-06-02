@@ -10,9 +10,9 @@ so the whole pipeline can be relocated or sandboxed by changing one setting.
 
 | Folder | Owner stage | Contents |
 |--------|-------------|----------|
-| `00_passport_import/` | `import` | Role-tagged golden anchors imported from a create-char-passport export (`state.json` + `refs/`). |
+| `00_passport_import/` | `import` | Role-tagged golden anchors imported from a create-char-passport export (`state.json` + `refs/`); they serve as **conditioning** for `generate`, not as training images. |
 | `01_generated/` | `generate` | Raw variants produced by the generation backend (ComfyUI/diffusers + external style LoRA). |
-| `02_clean/` | `clean` | Deduplicated, size-filtered generated variants (golden anchors are exempt from dedup). |
+| `02_clean/` | `clean` | Deduplicated, size-filtered generated variants. (Golden anchors are conditioning for `generate` only and never reach this stage.) |
 | `03_dataset/<N>_<trigger>/` | `caption` | kohya-ready images + `.txt` caption sidecars. |
 | `manual_review/` | *(any stage)* | Near-duplicates, out-of-spec frames, or anything kicked out for a human. |
 
@@ -51,7 +51,6 @@ flowchart LR
     Imp -->|generate| Gen[01_generated]
     Gen -->|clean / dedup| Cl[02_clean]
     Cl -->|caption + layout| DS[03_dataset]
-    Imp -.golden anchors, dedup-exempt.-> DS
     Gen -.near-dup / out-of-spec.-> MR[manual_review]
 ```
 

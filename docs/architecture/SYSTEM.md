@@ -14,9 +14,14 @@ into ~30–40 diverse, in-style variants locally.
 - **Style is external (Style Locker).** Generation loads a pre-trained *style*
   LoRA + style prompt; character captions never contain style tokens, so the
   character LoRA carries only face/body geometry.
-- **Use every incoming image.** The passport is mandatory; optional groups
-  (emotions / outfits / props) are used when present. Golden anchors are used as
-  conditioning and are **exempt from dedup**.
+- **Use every incoming image — as generation conditioning.** The passport is
+  mandatory; optional groups (emotions / outfits / props) are used when present.
+  Golden anchors feed the **generate** stage as img2img / ControlNet references;
+  they are **not** copied into the training set (their shared grey-studio
+  background + neutral expression would otherwise bind to identity). The trained
+  dataset is the locally generated variants only. `assemble_dataset(anchors=…)`
+  remains an opt-in primitive for routing anchors through, but the default
+  pipeline passes none.
 - **Commercially safe.** img2img + ControlNet (OpenPose/depth, Apache/MIT).
   InsightFace-based tools (PuLID / IP-Adapter / InstantID) are forbidden for the
   commercial dataset (HLE-668).
@@ -27,7 +32,7 @@ into ~30–40 diverse, in-style variants locally.
 |-------|--------|------|
 | import | `00_passport_import/` | read a passport `state.json`, walk its pointers, role-tag + normalize the golden anchors |
 | generate | `01_generated/` | multiply anchors into variants via the injected backend (ComfyUI/diffusers + style LoRA) |
-| clean | `02_clean/` | perceptual-hash dedup + size filter of generated variants (anchors exempt) |
+| clean | `02_clean/` | perceptual-hash dedup + size filter of the generated variants (anchors never enter this stage — they are generation conditioning only) |
 | caption + layout | `03_dataset/<repeats>_<trigger>/` | Character-Locker captions + kohya folder with `.txt` sidecars |
 | — | `manual_review/` | anything kicked out for a human (near-dups, out-of-spec) |
 
@@ -51,7 +56,6 @@ flowchart LR
     Imp -->|generate| Gen[01_generated]
     Gen -->|clean / dedup| Cl[02_clean]
     Cl -->|caption + layout| DS[03_dataset]
-    Imp -.golden anchors, dedup-exempt.-> DS
     Gen -.near-dup / out-of-spec.-> MR[manual_review]
 ```
 

@@ -46,7 +46,7 @@
             "shell": "bash",
             "timeout": 600,
             "statusMessage": "PR quality gate (make check + dataset verifier)...",
-            "command": "input=$(cat); printf '%s' \"$input\" | grep -q 'gh pr create' || exit 0; gate(){ if ! out=$(eval \"$1\" 2>&1); then { echo \"PR blocked: $2 failed. Fix it, then retry gh pr create.\"; echo \"$out\"; } >&2; exit 2; fi; }; gate 'uv run ruff check .' 'ruff lint'; gate 'uv run ruff format --check .' 'ruff format-check'; gate 'uv run pyright' 'pyright'; gate 'uv run bandit -c pyproject.toml -r src/ -q' 'bandit'; gate 'uv run pip-audit' 'pip-audit'; gate 'uv run pytest --cov --cov-fail-under=90' 'pytest (coverage>=90%)'; gate 'uv run python .claude/skills/verifier-dataset/smoke.py' 'dataset verifier'"
+            "command": "input=$(cat); printf '%s' \"$input\" | grep -q 'gh pr create' || exit 0; gate(){ if ! out=$(eval \"$1\" 2>&1); then { echo \"PR blocked: $2 failed. Fix it, then retry gh pr create.\"; echo \"$out\"; } >&2; exit 2; fi; }; gate 'uv run ruff check .' 'ruff lint'; gate 'uv run ruff format --check .' 'ruff format-check'; gate 'uv run pyright' 'pyright'; gate 'uv run bandit -c pyproject.toml -r src/ -q' 'bandit'; gate 'uv run pip-audit || uv run pip-audit --vulnerability-service osv' 'pip-audit'; gate 'uv run pytest --cov --cov-fail-under=90' 'pytest (coverage>=90%)'; gate 'uv run python .claude/skills/verifier-dataset/smoke.py' 'dataset verifier'"
           }
         ]
       }
