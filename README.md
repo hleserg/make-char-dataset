@@ -37,9 +37,21 @@ commercial dataset; pose/structure comes from license-safe ControlNet.
 
 Stages (see [docs/architecture/WORKSPACE.md](docs/architecture/WORKSPACE.md)):
 `00_passport_import` → `01_generated` → `02_clean` (dedup) →
-`03_dataset/<repeats>_<trigger>` (images + `.txt` captions). The pipeline is
-resumable (`.stage_complete` markers + `--force`) and the heavy generation backend
-is injected behind a Protocol, so tests and CI run with no GPU.
+`03_dataset/<repeats>_<trigger>` (images + `.txt` captions), then an **opt-in**
+`train` stage → `06_lora/<name>/<name>.safetensors`. The pipeline is resumable
+(`.stage_complete` markers + `--force`) and the heavy generation backend is
+injected behind a Protocol, so tests and CI run with no GPU.
+
+The char-LoRA trains on **Flux.1-dev** so it stacks with the comic **style** LoRA
+(`Flux + cmcstyle + <char>_char`). Training shells out to
+[ostris **ai-toolkit**](https://github.com/ostris/ai-toolkit) — not kohya — because
+only it can `qint4`-quantize the Flux base to fit ~16 GB VRAM. See
+[docs/architecture/TRAINING.md](docs/architecture/TRAINING.md).
+
+```bash
+make-char-dataset doctor              # check the training env (no GPU)
+make-char-dataset train --trigger kael   # -> 06_lora/kael/kael.safetensors
+```
 
 ## Quickstart
 
@@ -59,6 +71,8 @@ uv run python .claude/skills/verifier-dataset/smoke.py   # free no-GPU dataset c
 | `src/make_char_dataset/config.py` | typed settings via `pydantic-settings` |
 | `src/make_char_dataset/workspace.py` | single-root workspace / stage-folder layout contract |
 | `src/make_char_dataset/assembly.py` | pure dataset core: `Generator` Protocol, dedup, caption, kohya layout |
+| `src/make_char_dataset/train.py` | opt-in char-LoRA training (Flux via ai-toolkit) behind a `Trainer` Protocol |
+| `src/make_char_dataset/doctor.py` | training-environment validation (`make-char-dataset doctor`) |
 | `src/make_char_dataset/observability/` | Sentry init (`send_default_pii=False`) + component tags |
 | `.claude/skills/verifier-dataset/` | runtime dataset verifier (free no-GPU smoke + heavy GPU tier) |
 | `tests/` | `unit/` + `integration/`, pytest with >=90% coverage gate |

@@ -19,8 +19,12 @@ from make_char_dataset.caption import run_caption, run_clean
 from make_char_dataset.config import get_settings
 from make_char_dataset.generate import run_generate
 from make_char_dataset.ingest import run_import
+from make_char_dataset.train import run_train
 
-STAGES: tuple[str, ...] = ("import", "generate", "clean", "caption")
+# Order matters: each stage feeds the next. ``train`` is last and opt-in — it is
+# heavy (a GPU + the Flux base) and gated off by default (``run_train=False``), so
+# ``run-all`` runs the dataset stages only unless training is explicitly enabled.
+STAGES: tuple[str, ...] = ("import", "generate", "clean", "caption", "train")
 
 
 def run_stage(stage: str, *, export_dir: Path | str | None = None, force: bool = False) -> Any:
@@ -35,6 +39,8 @@ def run_stage(stage: str, *, export_dir: Path | str | None = None, force: bool =
         return run_clean(force=force)
     if stage == "caption":
         return run_caption(force=force)
+    if stage == "train":
+        return run_train(force=force)
     raise ValueError(f"unknown stage {stage!r}; expected one of {STAGES}")
 
 
@@ -51,6 +57,7 @@ def run_all(export_dir: Path | str, *, force: bool = False) -> dict[str, Any]:
         "generate": settings.run_generate,
         "clean": settings.run_clean,
         "caption": settings.run_caption,
+        "train": settings.run_train,
     }
     results: dict[str, Any] = {}
     for stage in STAGES:

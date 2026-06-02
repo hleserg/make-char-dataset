@@ -27,9 +27,21 @@ LoRA**. Это шаг *локального размножения* в пайп�
 
 Стадии (см. [docs/architecture/WORKSPACE.md](docs/architecture/WORKSPACE.md)):
 `00_passport_import` → `01_generated` → `02_clean` (дедуп) →
-`03_dataset/<repeats>_<trigger>` (картинки + `.txt` капшены). Пайплайн
-перезапускаемый (`.stage_complete` + `--force`), тяжёлый бэкенд генерации внедрён
-за Protocol — тесты и CI идут без GPU.
+`03_dataset/<repeats>_<trigger>` (картинки + `.txt` капшены), затем **опциональная**
+стадия `train` → `06_lora/<name>/<name>.safetensors`. Пайплайн перезапускаемый
+(`.stage_complete` + `--force`), тяжёлый бэкенд генерации внедрён за Protocol —
+тесты и CI идут без GPU.
+
+Персонажная LoRA обучается на **Flux.1-dev**, чтобы стэкаться со стилевой LoRA
+комикса (`Flux + cmcstyle + <char>_char`). Обучение запускается через
+[ostris **ai-toolkit**](https://github.com/ostris/ai-toolkit), а не kohya: только он
+умеет квантовать базу Flux в `qint4` и влезть в ~16 ГБ VRAM. См.
+[docs/architecture/TRAINING.md](docs/architecture/TRAINING.md).
+
+```bash
+make-char-dataset doctor              # проверить окружение обучения (без GPU)
+make-char-dataset train --trigger kael   # -> 06_lora/kael/kael.safetensors
+```
 
 ## Быстрый старт
 

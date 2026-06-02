@@ -12,6 +12,7 @@ Layout::
       01_generated/            raw variants produced by the generation backend
       02_clean/                deduplicated, size-filtered variants
       03_dataset/<N>_<trig>/   kohya-ready images + caption sidecars
+      06_lora/<name>/          trained character LoRA (ai-toolkit output; opt-in)
       manual_review/           anything kicked out for a human to inspect
 """
 
@@ -64,6 +65,15 @@ class Workspace:
     def manual_review(self) -> Path:
         """Artifacts kicked out for a human to inspect."""
         return self.root / "manual_review"
+
+    @property
+    def lora(self) -> Path:
+        """Trained character LoRA output (``06_lora/``).
+
+        The ``train`` stage shells out to ai-toolkit with this as its
+        ``training_folder``; the LoRA lands at ``06_lora/<name>/<name>.safetensors``.
+        """
+        return self.root / "06_lora"
 
     def training_dir(self, repeats: int, trigger: str) -> Path:
         """Return the kohya training subfolder named ``<repeats>_<trigger>``.

@@ -105,6 +105,30 @@ def test_run_stage_dispatches_each_stage(tmp_path: Path, monkeypatch: pytest.Mon
     assert result.training_dir.name == "10_conan"
 
 
+def test_run_all_runs_train_when_enabled(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    export = _make_export(tmp_path)
+    _configure(monkeypatch, tmp_path, APP_RUN_TRAIN="true")
+    # Stub the (heavy) trainer entry so run-all's train branch runs without a GPU.
+    monkeypatch.setattr("make_char_dataset.orchestrate.run_train", lambda *, force=False: "LORA")
+
+    results = run_all(export)
+
+    assert set(results) == {"import", "generate", "clean", "caption", "train"}
+    assert results["train"] == "LORA"
+
+
+def test_run_stage_train_routes(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: dict[str, bool] = {}
+
+    def fake_run_train(*, force: bool = False) -> str:
+        seen["force"] = force
+        return "LORA_PATH"
+
+    monkeypatch.setattr("make_char_dataset.orchestrate.run_train", fake_run_train)
+    assert run_stage("train", force=True) == "LORA_PATH"
+    assert seen["force"] is True
+
+
 def test_run_stage_import_requires_export() -> None:
     with pytest.raises(ValueError, match="requires an export_dir"):
         run_stage("import")
