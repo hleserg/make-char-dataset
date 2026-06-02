@@ -14,7 +14,9 @@ output of [create-char-passport](https://github.com/hleserg/create-char-passport
 dataset**. It is the *local multiplication* step of the comic-character pipeline:
 a few identity anchors are multiplied into ~30–40 diverse, in-style variants using
 a **pre-trained style LoRA** (Style Locker) and a license-safe img2img + ControlNet
-backend, then deduplicated, captioned (Character-Locker), and laid out for kohya.
+backend, then deduplicated, captioned (**VLM prose**, Character-Locker strategy:
+trigger-first, identity + style omitted — see
+[docs/architecture/CAPTIONING.md](docs/architecture/CAPTIONING.md)), and laid out for kohya.
 
 ---
 
@@ -71,6 +73,7 @@ uv run python .claude/skills/verifier-dataset/smoke.py   # free no-GPU dataset c
 | `src/make_char_dataset/config.py` | typed settings via `pydantic-settings` |
 | `src/make_char_dataset/workspace.py` | single-root workspace / stage-folder layout contract |
 | `src/make_char_dataset/assembly.py` | pure dataset core: `Generator` Protocol, dedup, caption, kohya layout |
+| `src/make_char_dataset/vlm_caption.py` + `proxy.py` | VLM (Gemini prose) captioner via the proxy Space, behind a `Captioner`/`CaptionClient` Protocol |
 | `src/make_char_dataset/train.py` | opt-in char-LoRA training (Flux via ai-toolkit) behind a `Trainer` Protocol |
 | `src/make_char_dataset/doctor.py` | training-environment validation (`make-char-dataset doctor`) |
 | `src/make_char_dataset/observability/` | Sentry init (`send_default_pii=False`) + component tags |

@@ -25,7 +25,6 @@ from make_char_dataset import caption as caption_mod
 from make_char_dataset import generate as generate_mod
 from make_char_dataset import ingest as ingest_mod
 from make_char_dataset.assembly import StubGenerator
-from make_char_dataset.tagging import StubTagger
 from make_char_dataset.workspace import Workspace
 
 # Captions/labels use — and ✓; reconfigure so a cp1251 Windows console won't choke.
@@ -83,7 +82,6 @@ def build_sample_pipeline(
     trigger: str = "conan",
     repeats: int = 10,
     count: int = 8,
-    style_prompt: str = "ink, halftone",
 ) -> SamplePipeline:
     """Run the REAL stages import -> generate -> clean -> caption on a synthetic export.
 
@@ -109,9 +107,10 @@ def build_sample_pipeline(
     # 4) clean: dedup + size filter -> 02_clean (small min side so 64px stubs pass).
     clean = caption_mod.clean_variants(workspace, dedup_distance=6, min_side_px=16)
 
-    # 5) caption: Character-Locker captions + kohya layout -> 03_dataset.
+    # 5) caption: trigger-first prose captions + kohya layout -> 03_dataset
+    #    (the GPU/network-free StubCaptioner stands in for the VLM proxy).
     dataset = caption_mod.caption_dataset(
-        workspace, StubTagger(), trigger=trigger, repeats=repeats, style_prompt=style_prompt
+        workspace, caption_mod.StubCaptioner(trigger), trigger=trigger, repeats=repeats
     )
 
     return SamplePipeline(

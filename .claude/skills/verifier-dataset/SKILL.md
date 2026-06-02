@@ -29,11 +29,12 @@ no-API-key/browser.
 ## Why a stub generator, not the real model
 
 The heavy generation backend (ComfyUI over HTTP+websocket, or local diffusers,
-loaded with the external style LoRA) and the WD14 captioner sit behind Protocols
-and are **lazily imported** (the `pure-core-lazy-backend` PLAYBOOK marker in
+loaded with the external style LoRA) and the captioner (VLM prose via the Gemini
+proxy by default, or the legacy WD14 tagger) sit behind Protocols and are **lazily
+imported** (the `pure-core-lazy-backend` PLAYBOOK marker in
 `src/make_char_dataset/assembly.py`). That lazy-Protocol design is exactly what
-lets this check run at all: the smoke and the ≥90 % unit path never import
-torch / diffusers / onnxruntime, so they are fast and need no GPU. The same
+lets this check run at all: the smoke uses a `StubCaptioner` and the ≥90 % unit path
+never imports torch / diffusers / onnxruntime / the network, so they are fast and need no GPU. The same
 reason the heavy deps live in a PEP-735 `[dependency-groups] gpu` group, not an
 extra.
 
@@ -47,7 +48,7 @@ uv run python .claude/skills/verifier-dataset/smoke.py
 
 It seeds a temp workspace, writes a synthetic passport export, and runs the
 **real** stages `import → generate → clean → caption` (stub generation + stub
-tagger, one planted near-duplicate variant), then asserts the on-disk contract:
+captioner, one planted near-duplicate variant), then asserts the on-disk contract:
 
 - every stage wrote its `.stage_complete` marker (`00 → 01 → 02 → 03`),
 - the dataset folder is named exactly `<repeats>_<trigger>` (the kohya convention),
@@ -68,7 +69,7 @@ check the `PreToolUse` PR gate in `.claude/settings.json` runs on every
 
 ## Heavy, real-generation check (GPU + models + human eye)
 
-The generation backend (HLE-766) and WD14 tagger (HLE-767) now exist; use this
+The generation backend (HLE-766) and the VLM/WD14 captioners now exist; use this
 tier when you want to judge **output quality / character-identity consistency** —
 which a human must eye. Provide:
 
