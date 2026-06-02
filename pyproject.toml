@@ -3,14 +3,14 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "projectname"
+name = "make-char-dataset"
 version = "0.2.0"
-description = "TODO: one-line project description."
+description = "ComfyUI/diffusers image generation -> kohya-ready character LoRA dataset pipeline"
 readme = "README.md"
 requires-python = ">=3.12"
 license = { text = "MIT" }
 authors = [{ name = "Sergey Khlebnikov", email = "you@example.com" }]
-keywords = ["python", "ai", "agents"]
+keywords = ["lora", "dataset", "kohya", "stable-diffusion", "character", "comfyui"]
 classifiers = [
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.12",
@@ -19,6 +19,9 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
+    "numpy>=2",
+    "pillow>=11",
+    "imagehash>=4.3",
     "pydantic>=2.7",
     "pydantic-settings>=2.3",
     "sentry-sdk>=2.0",
@@ -39,15 +42,57 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/hleserg/projectname"
-Repository = "https://github.com/hleserg/projectname"
-Issues = "https://github.com/hleserg/projectname/issues"
+Homepage = "https://github.com/hleserg/make-char-dataset"
+Repository = "https://github.com/hleserg/make-char-dataset"
+Issues = "https://github.com/hleserg/make-char-dataset/issues"
 
 [project.scripts]
-projectname = "projectname.cli:main"
+make-char-dataset = "make_char_dataset.cli:main"
+
+[dependency-groups]
+# GPU/ML stack for the generation + captioning stages (landed in later subtasks
+# of HLE-757). Deliberately a PEP 735 dependency-group, NOT a
+# [project.optional-dependencies] extra: the documented `uv sync --all-extras`
+# (CI and fresh-clone setup) installs extras but NOT groups, so the light CPU
+# path and the `make check` gate stay fast and `pip-audit` never scans this heavy
+# tree. Install locally with `uv sync --group gpu`. The group is still resolved
+# and pinned in uv.lock across every platform.
+gpu = [
+    "torch>=2.7",
+    "torchvision>=0.22",
+    "diffusers>=0.30",
+    "transformers>=4.44",
+    "accelerate>=0.34",
+    "safetensors>=0.4",
+    "huggingface-hub>=0.24",
+    # WD14 tagger (Character-Locker captioning) runs via ONNX (torch-free).
+    # onnxruntime-gpu has no macOS wheels, so fall back to the CPU build there to
+    # keep `uv lock` resolvable.
+    "onnxruntime-gpu>=1.19 ; sys_platform == 'linux' or sys_platform == 'win32'",
+    "onnxruntime>=1.19 ; sys_platform == 'darwin'",
+]
+
+# CUDA wheels for torch/torchvision. cu128 carries Blackwell (sm_120, RTX 50xx)
+# kernels. `explicit = true` means this index is used ONLY for packages mapped to
+# it in [tool.uv.sources]; everything else still resolves from PyPI.
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+# Pull torch/torchvision from the CUDA index on Linux/Windows only. macOS has no
+# CUDA wheels; with no marker match there, resolution falls back to the PyPI CPU
+# build, which keeps `uv lock` resolvable on every platform (OS-agnostic).
+[tool.uv.sources]
+torch = [
+    { index = "pytorch-cu128", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+]
+torchvision = [
+    { index = "pytorch-cu128", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/projectname"]
+packages = ["src/make_char_dataset"]
 
 [tool.ruff]
 line-length = 100
@@ -59,7 +104,7 @@ select = ["F", "E", "W", "I", "UP", "B", "SIM", "RUF"]
 ignore = ["RUF001", "RUF002", "RUF003"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["projectname"]
+known-first-party = ["make_char_dataset"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**/*.py" = ["S101"]
@@ -87,8 +132,8 @@ markers = [
 
 [tool.coverage.run]
 branch = true
-source = ["src/projectname"]
-omit = ["src/projectname/cli.py"]
+source = ["src/make_char_dataset"]
+omit = ["src/make_char_dataset/cli.py"]
 
 [tool.coverage.report]
 fail_under = 90
@@ -107,7 +152,7 @@ exclude_dirs = ["tests", ".venv"]
 [tool.commitizen]
 name = "cz_conventional_commits"
 version = "0.2.0"
-version_files = ["pyproject.toml:version", "src/projectname/__init__.py:__version__"]
+version_files = ["pyproject.toml:version", "src/make_char_dataset/__init__.py:__version__"]
 tag_format = "v$version"
 update_changelog_on_bump = true
 major_version_zero = true

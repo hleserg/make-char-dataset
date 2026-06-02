@@ -6,7 +6,7 @@ from collections.abc import Iterator
 
 import pytest
 
-from projectname.config import get_settings
+from make_char_dataset.config import get_settings
 
 
 @pytest.fixture(autouse=True)

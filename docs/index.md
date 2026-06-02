@@ -1,4 +1,4 @@
-# projectname docs
+# make_char_dataset docs
 
 Start here, then dive into specifics.
 

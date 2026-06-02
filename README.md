@@ -1,49 +1,66 @@
-# projectname
+# make_char_dataset
 
-> TODO: one-line project description.
+> ComfyUI/diffusers image generation -> kohya-ready character LoRA dataset pipeline
 
-[![CI](https://github.com/hleserg/projectname/actions/workflows/ci.yml/badge.svg)](https://github.com/hleserg/projectname/actions/workflows/ci.yml)
+[![CI](https://github.com/hleserg/make_char_dataset/actions/workflows/ci.yml/badge.svg)](https://github.com/hleserg/make_char_dataset/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/)
 
 [Русская версия](README-ru.md)
 
-A Python starter kit wired for working with coding agents (Claude Code, Cursor):
-`uv` + `ruff` + `pyright` + `pytest`, a lean machine-readable `AGENTS.md`, a single
-`make check` quality gate, privacy-first Sentry, PLAYBOOK markers, and CI out of the box.
+`make-char-dataset` turns a character's **passport set** — the golden reference
+output of [create-char-passport](https://github.com/hleserg/create-char-passport)
+(`state.json` + role-tagged `refs/`) — into a **kohya-ready character LoRA
+dataset**. It is the *local multiplication* step of the comic-character pipeline:
+a few identity anchors are multiplied into ~30–40 diverse, in-style variants using
+a **pre-trained style LoRA** (Style Locker) and a license-safe img2img + ControlNet
+backend, then deduplicated, captioned (Character-Locker), and laid out for kohya.
 
 ---
 
-## Using this template
+## How it fits the pipeline
 
-1. Click **"Use this template" -> Create a new repository** on GitHub.
-2. Clone it and run the init script to rename the package and clear placeholders:
-   ```bash
-   python scripts/init_template.py --name your_package --description "What it does"
-   ```
-3. Install and verify the green baseline:
-   ```bash
-   uv sync --all-extras
-   make check        # lint + format + types + security + tests, all green
-   ```
-4. Read **[AGENTS.md](AGENTS.md)** — it is the contract every agent (and human) follows.
+```mermaid
+flowchart LR
+    Banana[create-char-passport: identity canon] --> Export[passport export]
+    Export -->|make-char-dataset| DS[kohya character dataset]
+    DS --> Train[character LoRA training]
+```
+
+Doctrine: **consistency in the character, diversity in everything else.** The paid
+API (Nano Banana) fixes identity — the 5 passport frames plus optional
+emotions/outfits/props — and this repo multiplies that canon locally. The art
+**style is trained separately** (Style Locker) and loaded as an external LoRA at
+generation time, so the character LoRA carries only face/body geometry and never
+style. InsightFace-based tools (PuLID / IP-Adapter / InstantID) are avoided for the
+commercial dataset; pose/structure comes from license-safe ControlNet.
+
+Stages (see [docs/architecture/WORKSPACE.md](docs/architecture/WORKSPACE.md)):
+`00_passport_import` → `01_generated` → `02_clean` (dedup) →
+`03_dataset/<repeats>_<trigger>` (images + `.txt` captions). The pipeline is
+resumable (`.stage_complete` markers + `--force`) and the heavy generation backend
+is injected behind a Protocol, so tests and CI run with no GPU.
 
 ## Quickstart
 
 ```bash
-uv sync --all-extras        # create .venv and install everything
-cp .env.example .env        # fill in secrets locally (never commit)
-uv run projectname --version
+uv sync --all-extras        # create .venv and install the light/CPU deps
+cp .env.example .env        # fill in secrets + paths locally (never commit)
+uv run make-char-dataset --version
 make check                  # the Definition-of-Done gate
+uv run python .claude/skills/verifier-dataset/smoke.py   # free no-GPU dataset check
 ```
 
 ## Project layout
 
 | Path | Purpose |
 |------|---------|
-| `src/projectname/` | the package (src-layout, fully typed, ships `py.typed`) |
-| `src/projectname/config.py` | typed settings via `pydantic-settings` |
-| `src/projectname/observability/` | Sentry init (`send_default_pii=False`) + component tags |
+| `src/make_char_dataset/` | the package (src-layout, fully typed, ships `py.typed`) |
+| `src/make_char_dataset/config.py` | typed settings via `pydantic-settings` |
+| `src/make_char_dataset/workspace.py` | single-root workspace / stage-folder layout contract |
+| `src/make_char_dataset/assembly.py` | pure dataset core: `Generator` Protocol, dedup, caption, kohya layout |
+| `src/make_char_dataset/observability/` | Sentry init (`send_default_pii=False`) + component tags |
+| `.claude/skills/verifier-dataset/` | runtime dataset verifier (free no-GPU smoke + heavy GPU tier) |
 | `tests/` | `unit/` + `integration/`, pytest with >=90% coverage gate |
 | `docs/` | architecture (ADRs), development standard, PLAYBOOK marker spec |
 | `scripts/` | `init_template.py`, `extract_playbook.py` |

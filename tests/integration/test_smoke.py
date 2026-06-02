@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from projectname import __version__
+from make_char_dataset import __version__
 
 
 @pytest.mark.integration
