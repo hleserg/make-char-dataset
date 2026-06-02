@@ -39,8 +39,9 @@ commercial dataset; pose/structure comes from license-safe ControlNet.
 
 Stages (see [docs/architecture/WORKSPACE.md](docs/architecture/WORKSPACE.md)):
 `00_passport_import` → `01_generated` → `02_clean` (dedup) →
-`03_dataset/<repeats>_<trigger>` (images + `.txt` captions), then an **opt-in**
-`train` stage → `06_lora/<name>/<name>.safetensors`. The pipeline is resumable
+`03_dataset/<repeats>_<trigger>` (images + `.txt` captions), then **opt-in**
+`train` → `06_lora/<name>/<name>.safetensors` and `eval` → `07_eval/` (the in-stack
+acceptance grid). The pipeline is resumable
 (`.stage_complete` markers + `--force`) and the heavy generation backend is
 injected behind a Protocol, so tests and CI run with no GPU.
 
@@ -75,6 +76,7 @@ uv run python .claude/skills/verifier-dataset/smoke.py   # free no-GPU dataset c
 | `src/make_char_dataset/assembly.py` | pure dataset core: `Generator` Protocol, dedup, caption, kohya layout |
 | `src/make_char_dataset/vlm_caption.py` + `proxy.py` | VLM (Gemini prose) captioner via the proxy Space, behind a `Captioner`/`CaptionClient` Protocol |
 | `src/make_char_dataset/train.py` | opt-in char-LoRA training (Flux via ai-toolkit) behind a `Trainer` Protocol |
+| `src/make_char_dataset/evaluate.py` | opt-in in-stack eval grid (`Flux + cmcstyle + <char>_char`) behind a `StackSampler` Protocol |
 | `src/make_char_dataset/doctor.py` | training-environment validation (`make-char-dataset doctor`) |
 | `src/make_char_dataset/observability/` | Sentry init (`send_default_pii=False`) + component tags |
 | `.claude/skills/verifier-dataset/` | runtime dataset verifier (free no-GPU smoke + heavy GPU tier) |

@@ -15,6 +15,7 @@ so the whole pipeline can be relocated or sandboxed by changing one setting.
 | `02_clean/` | `clean` | Deduplicated, size-filtered generated variants. (Golden anchors are conditioning for `generate` only and never reach this stage.) |
 | `03_dataset/<N>_<trigger>/` | `caption` | kohya-ready images + `.txt` caption sidecars. |
 | `06_lora/<name>/` | `train` *(opt-in)* | Trained character LoRA (`<name>.safetensors`) + the generated ai-toolkit config and `train.log`. ai-toolkit owns the `<name>/` subfolder; the stage's generated config sits at `06_lora/aitoolkit_config.json`. |
+| `07_eval/` | `eval` *(opt-in)* | In-stack acceptance grid (`stack_eval_grid.png`) + `stack_eval.json` manifest (and per-cell graphs under `--dry-run`). |
 | `manual_review/` | *(any stage)* | Near-duplicates, out-of-spec frames, or anything kicked out for a human. |
 
 `<N>` is `APP_DATASET_REPEATS` and `<trigger>` is `APP_TRIGGER_TOKEN`, so the

@@ -12,6 +12,7 @@ nav:
       - Overview: architecture/SYSTEM.md
       - Captioning: architecture/CAPTIONING.md
       - Char-LoRA training: architecture/TRAINING.md
+      - Stack eval: architecture/EVAL.md
   - Development:
       - Standard: development/DEVELOPMENT_STANDARD.md
       - PLAYBOOK markers: development/PLAYBOOK_MARKERS.md

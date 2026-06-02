@@ -35,6 +35,7 @@ into ~30–40 diverse, in-style variants locally.
 | clean | `02_clean/` | perceptual-hash dedup + size filter of the generated variants (anchors never enter this stage — they are generation conditioning only) |
 | caption + layout | `03_dataset/<repeats>_<trigger>/` | trigger-first captions (VLM prose by default) + kohya folder with `.txt` sidecars |
 | train *(opt-in)* | `06_lora/<name>/` | train the character LoRA on Flux.1-dev via ai-toolkit (off by default) |
+| eval *(opt-in)* | `07_eval/` | in-stack acceptance grid: `Flux + cmcstyle + <char>_char` trigger-isolation cells (ComfyUI) |
 | — | `manual_review/` | anything kicked out for a human (near-dups, out-of-spec) |
 
 ## Components
@@ -61,6 +62,13 @@ into ~30–40 diverse, in-style variants locally.
   style LoRA — `Flux + cmcstyle + <char>_char`. See
   [Char-LoRA training](TRAINING.md). `doctor.py` validates the training
   environment before a run.
+- **eval** *(opt-in)* — `evaluate.py` renders the DoD acceptance grid **in the
+  stack** `Flux + cmcstyle + <char>_char`: per prompt, four trigger-isolation cells
+  (base / cmcstyle-only / `<char>_char`-only / stack) so identity-holds, style-holds
+  and neither-overrides are readable at a glance. Pure Flux-graph/cell/grid builders
+  behind a `StackSampler` Protocol; the ComfyUI sampler is the only uncovered part,
+  and `--dry-run` writes the graphs + an empty grid with no GPU. See
+  [Stack eval](EVAL.md).
 - **orchestrate / cli** — `orchestrate.run_all` chains the dataset stages
   (resumable, flag-gated); `train` is last and opt-in (`APP_RUN_TRAIN=false`), so
   `run-all` runs the dataset stages only unless training is enabled. `cli.py` is
@@ -96,6 +104,10 @@ make-char-dataset run-all path/to/export --force   # re-run every enabled stage
 # opt-in: train the character LoRA from 03_dataset (Flux via ai-toolkit):
 make-char-dataset doctor              # check the training env first (no GPU)
 make-char-dataset train --trigger kael   # -> 06_lora/kael/kael.safetensors
+
+# opt-in: in-stack acceptance grid (needs ComfyUI + both LoRAs; --dry-run is GPU-free):
+make-char-dataset eval --trigger kael --dry-run   # writes graphs + layout to 07_eval/
+make-char-dataset eval --trigger kael             # -> 07_eval/stack_eval_grid.png
 ```
 
 CI runs the whole pipeline hermetically on the stub backends (`APP_BACKEND=stub`,
