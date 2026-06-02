@@ -176,18 +176,20 @@ def make_trainer(
 def build_subprocess_env(base_env: Mapping[str, str], hf_token: str) -> dict[str, str]:
     """Build the ai-toolkit subprocess environment from ``base_env`` (pure).
 
-    Layers the alloc/telemetry tuning on top of the inherited env and — crucially —
-    injects ``HF_TOKEN`` when one is configured. pydantic loads the token from
+    Injects ``HF_TOKEN`` when one is configured: pydantic loads the token from
     ``.env`` into settings but never exports it to ``os.environ``, so without this
     the gated FLUX.1-dev download would 401 even though the token was supplied the
     documented way. Honors the repo rule (token comes via ``get_settings()``, not a
     direct ``os.environ`` read).
+
+    Deliberately does **not** set ``PYTORCH_CUDA_ALLOC_CONF=expandable_segments``:
+    on WSL2 the expandable-segments allocator uses CUDA VMM (``cuMemMap``) calls
+    that fail as ``CUDA driver error: out of memory`` inside ai-toolkit's quanto
+    weight cast — even with VRAM free. The proven Flux fit-check launches ai-toolkit
+    with a bare environment, so we keep it bare. (The sibling kohya trainer sets it
+    because kohya's allocation pattern differs.)
     """
-    env = {
-        **base_env,
-        "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",
-        "DISABLE_TELEMETRY": "YES",
-    }
+    env = {**base_env, "DISABLE_TELEMETRY": "YES"}
     if hf_token.strip():
         env["HF_TOKEN"] = hf_token
     return env

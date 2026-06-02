@@ -109,8 +109,13 @@ def test_build_subprocess_env_injects_token() -> None:
     env = build_subprocess_env({"PATH": "/usr/bin"}, "hf_secret")
     assert env["HF_TOKEN"] == "hf_secret"
     assert env["PATH"] == "/usr/bin"  # base env preserved
-    assert env["PYTORCH_CUDA_ALLOC_CONF"] == "expandable_segments:True"
     assert env["DISABLE_TELEMETRY"] == "YES"
+
+
+def test_build_subprocess_env_no_expandable_segments() -> None:
+    # expandable_segments uses CUDA VMM calls that fail on WSL2 inside ai-toolkit's
+    # quanto cast ("CUDA driver error: out of memory"). The proven launch is bare.
+    assert "PYTORCH_CUDA_ALLOC_CONF" not in build_subprocess_env({}, "tok")
 
 
 def test_build_subprocess_env_omits_empty_token() -> None:
