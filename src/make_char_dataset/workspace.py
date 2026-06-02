@@ -75,6 +75,11 @@ class Workspace:
         """
         return self.root / "06_lora"
 
+    @property
+    def eval_dir(self) -> Path:
+        """In-stack eval grid output (``07_eval/``): the contact sheet + manifest."""
+        return self.root / "07_eval"
+
     def training_dir(self, repeats: int, trigger: str) -> Path:
         """Return the kohya training subfolder named ``<repeats>_<trigger>``.
 

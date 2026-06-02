@@ -279,6 +279,41 @@ class Settings(BaseSettings):
         "keep it in .env, never commit it.",
     )
 
+    # --- Pipeline: in-stack eval grid (Flux + cmcstyle + <char>_char; opt-in) ---
+    # The DoD acceptance harness: render trigger-isolation cells (base / cmcstyle-only
+    # / <char>_char-only / stack) through ComfyUI so a human can judge that identity
+    # holds, style holds, and neither overrides the other.
+    eval_style_trigger: str = Field(
+        default="cmcstyle", description="Style LoRA trigger token, prepended to eval prompts."
+    )
+    eval_char_lora_path: str = Field(
+        default="",
+        description="char-LoRA .safetensors (in ComfyUI/models/loras) for eval; empty derives "
+        "'<train_output_name|trigger>.safetensors' from the train stage.",
+    )
+    eval_char_lora_weight: float = Field(
+        default=0.9, ge=0.0, le=2.0, description="char-LoRA weight at eval inference."
+    )
+    eval_prompts_file: str = Field(
+        default="",
+        description="Optional file (one scene prompt per line) overriding the default eval scenes.",
+    )
+    eval_steps: int = Field(default=20, ge=1, description="Flux sampling steps at eval.")
+    eval_guidance: float = Field(
+        default=3.5,
+        gt=0.0,
+        description="Flux inference guidance (~3.5; NOT the training guidance).",
+    )
+    eval_size: int = Field(default=1024, ge=64, description="Eval render size (px, square).")
+    eval_seed: int = Field(default=42, ge=0, description="Fixed eval seed (cells stay comparable).")
+    eval_unet: str = Field(
+        default="flux1-dev-fp8.safetensors",
+        description="ComfyUI UNETLoader filename (models/unet).",
+    )
+    eval_clip_l: str = Field(default="clip_l.safetensors", description="ComfyUI clip_l filename.")
+    eval_t5xxl: str = Field(default="t5xxl_fp16.safetensors", description="ComfyUI t5xxl filename.")
+    eval_vae: str = Field(default="ae.safetensors", description="ComfyUI Flux VAE filename.")
+
     # --- Pipeline: stage flags (gate which stages 'run-all' executes) ---
     run_import: bool = True
     run_generate: bool = True

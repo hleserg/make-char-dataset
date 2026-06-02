@@ -28,8 +28,9 @@ Character-Locker: триггер первым, идентичность и ст�
 
 Стадии (см. [docs/architecture/WORKSPACE.md](docs/architecture/WORKSPACE.md)):
 `00_passport_import` → `01_generated` → `02_clean` (дедуп) →
-`03_dataset/<repeats>_<trigger>` (картинки + `.txt` капшены), затем **опциональная**
-стадия `train` → `06_lora/<name>/<name>.safetensors`. Пайплайн перезапускаемый
+`03_dataset/<repeats>_<trigger>` (картинки + `.txt` капшены), затем **опциональные**
+`train` → `06_lora/<name>/<name>.safetensors` и `eval` → `07_eval/` (приёмочная
+сетка в стэке). Пайплайн перезапускаемый
 (`.stage_complete` + `--force`), тяжёлый бэкенд генерации внедрён за Protocol —
 тесты и CI идут без GPU.
 

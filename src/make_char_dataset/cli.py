@@ -15,6 +15,7 @@ import sys
 from make_char_dataset import __version__
 from make_char_dataset.config import get_settings
 from make_char_dataset.doctor import run_doctor
+from make_char_dataset.evaluate import run_eval
 from make_char_dataset.observability import init_sentry
 from make_char_dataset.orchestrate import run_all, run_stage
 
@@ -50,6 +51,14 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Also spawn ai-toolkit's venv to report installed torch + CUDA (slow).",
     )
+    eval_parser = sub.add_parser(
+        "eval", parents=[common], help="Render the in-stack eval grid (Flux + cmcstyle + char)."
+    )
+    eval_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Write the per-cell ComfyUI graphs + an empty-tile grid without calling ComfyUI.",
+    )
     return parser
 
 
@@ -74,6 +83,10 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "doctor":
         return run_doctor(probe=args.probe)
+    if args.command == "eval":
+        grid = run_eval(dry_run=args.dry_run)
+        print(f"eval grid written: {grid}")
+        return 0
     if args.command == "run-all":
         results = run_all(args.export_dir, force=args.force)
         print(f"run-all complete — stages run: {', '.join(results) or '(none enabled)'}")
