@@ -14,10 +14,11 @@ import sys
 
 from make_char_dataset import __version__
 from make_char_dataset.config import get_settings
+from make_char_dataset.doctor import run_doctor
 from make_char_dataset.observability import init_sentry
 from make_char_dataset.orchestrate import run_all, run_stage
 
-_STAGE_COMMANDS = ("import", "generate", "clean", "caption", "run-all")
+_STAGE_COMMANDS = ("import", "generate", "clean", "caption", "train", "run-all")
 _NEEDS_EXPORT = {"import", "run-all"}
 
 
@@ -41,6 +42,14 @@ def _build_parser() -> argparse.ArgumentParser:
         stage_parser = sub.add_parser(command, parents=[common], help=f"Run the {command} stage.")
         if command in _NEEDS_EXPORT:
             stage_parser.add_argument("export_dir", help="Path to the create-char-passport export.")
+    doctor_parser = sub.add_parser(
+        "doctor", parents=[common], help="Validate the heavy-tier training environment."
+    )
+    doctor_parser.add_argument(
+        "--probe",
+        action="store_true",
+        help="Also spawn ai-toolkit's venv to report installed torch + CUDA (slow).",
+    )
     return parser
 
 
@@ -63,6 +72,8 @@ def main(argv: list[str] | None = None) -> int:
     _apply_overrides(args)
     init_sentry()
 
+    if args.command == "doctor":
+        return run_doctor(probe=args.probe)
     if args.command == "run-all":
         results = run_all(args.export_dir, force=args.force)
         print(f"run-all complete — stages run: {', '.join(results) or '(none enabled)'}")

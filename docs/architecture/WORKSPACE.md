@@ -14,6 +14,7 @@ so the whole pipeline can be relocated or sandboxed by changing one setting.
 | `01_generated/` | `generate` | Raw variants produced by the generation backend (ComfyUI/diffusers + external style LoRA). |
 | `02_clean/` | `clean` | Deduplicated, size-filtered generated variants. (Golden anchors are conditioning for `generate` only and never reach this stage.) |
 | `03_dataset/<N>_<trigger>/` | `caption` | kohya-ready images + `.txt` caption sidecars. |
+| `06_lora/<name>/` | `train` *(opt-in)* | Trained character LoRA (`<name>.safetensors`) + the generated ai-toolkit config and `train.log`. ai-toolkit owns the `<name>/` subfolder; the stage's generated config sits at `06_lora/aitoolkit_config.json`. |
 | `manual_review/` | *(any stage)* | Near-duplicates, out-of-spec frames, or anything kicked out for a human. |
 
 `<N>` is `APP_DATASET_REPEATS` and `<trigger>` is `APP_TRIGGER_TOKEN`, so the
@@ -56,8 +57,11 @@ flowchart LR
 
 ## Idempotency
 
-Each stage writes a `.stage_complete` marker into its output folder on success and
-is **skipped on re-runs** unless `--force` is passed. This makes re-running a
-partially-finished pipeline safe and cheap. Stage enable flags (`APP_RUN_*`) gate
-which stages `run-all` executes; an explicit single-stage invocation always runs
-regardless of its flag.
+Each dataset stage writes a `.stage_complete` marker into its output folder on
+success and is **skipped on re-runs** unless `--force` is passed. This makes
+re-running a partially-finished pipeline safe and cheap. (The opt-in `train` stage
+has no marker — it is idempotent on the produced `06_lora/<name>/<name>.safetensors`
+instead, so a finished LoRA is reused unless `--force`.) Stage enable flags
+(`APP_RUN_*`) gate which stages `run-all` executes; an explicit single-stage
+invocation always runs regardless of its flag. `run_train` is off by default, so
+`run-all` runs the dataset stages only unless training is explicitly enabled.

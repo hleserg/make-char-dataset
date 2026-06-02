@@ -11,7 +11,7 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -140,11 +140,100 @@ class Settings(BaseSettings):
         "added to the training set (conditioning-only doctrine).",
     )
 
+    # --- Pipeline: char-LoRA training (heavy; opt-in; runs via ai-toolkit) ---
+    # The char-LoRA trains on Flux.1-dev so it stacks with the cmcstyle style LoRA
+    # (`Flux + cmcstyle + <char>_char`, HLE-802). Training shells out to ostris
+    # ai-toolkit — NOT kohya sd-scripts: kohya loads the whole Flux DiT before
+    # block-swap offload and OOMs ~16 GB, whereas ai-toolkit qint4-quantizes the
+    # transformer + text encoder so Flux LoRA training fits (the bit kohya can't do).
+    train_tool: str = Field(
+        default="ai-toolkit",
+        description="LoRA training toolchain. Only 'ai-toolkit' (ostris) is wired.",
+    )
+    aitoolkit_dir: Path = Field(
+        default=Path("/home/serg/ai-toolkit"),
+        description="Local clone of ostris/ai-toolkit (holds run.py and its own venv).",
+    )
+    train_python: str = Field(
+        default="",
+        description="Interpreter to launch ai-toolkit with; empty uses "
+        "<aitoolkit_dir>/venv/bin/python (its cu128/sm_120 venv).",
+    )
+    train_base_model: str = Field(
+        default="black-forest-labs/FLUX.1-dev",
+        description="Flux base (HF id or local path). MUST equal the style LoRA's base "
+        "so 'Flux + cmcstyle + <char>_char' stacks (HLE-802).",
+    )
+    train_output_name: str = Field(
+        default="",
+        description="char-LoRA filename stem (and ai-toolkit run name); empty uses the "
+        "trigger token, so the LoRA is '<trigger>.safetensors'.",
+    )
+    train_network_dim: int = Field(default=16, ge=1, description="LoRA rank (network.linear).")
+    train_network_alpha: int = Field(
+        default=16, ge=1, description="LoRA alpha (network.linear_alpha)."
+    )
+    train_steps: int = Field(
+        default=2200, ge=1, description="Total training steps (500-4000 is a good range)."
+    )
+    train_learning_rate: float = Field(default=1e-4, gt=0.0, description="Optimizer learning rate.")
+    train_batch_size: int = Field(default=1, ge=1, description="Training batch size.")
+    train_resolution: int = Field(
+        default=512,
+        ge=64,
+        description="Training/bucket resolution (px). qint4 low-VRAM Flux fits 512 on ~16 GB.",
+    )
+    train_optimizer: str = Field(
+        default="adamw8bit",
+        description="ai-toolkit optimizer ('adamw8bit', 'adafactor', ...).",
+    )
+    train_save_every: int = Field(
+        default=250, ge=1, description="Save an intermittent LoRA every N steps."
+    )
+    train_gradient_checkpointing: bool = Field(
+        default=True, description="Trade compute for VRAM (needed to fit Flux)."
+    )
+    train_quantize: bool = Field(
+        default=True,
+        description="Quantize the Flux base for low-VRAM training (ai-toolkit; kohya cannot).",
+    )
+    train_qtype: str = Field(
+        default="qint4", description="Transformer quantization type (qint4 fits ~16 GB)."
+    )
+    train_qtype_te: str = Field(default="qint4", description="Text-encoder quantization type.")
+    train_low_vram: bool = Field(
+        default=True,
+        description="ai-toolkit low_vram mode (quantize on CPU; slower, far less VRAM).",
+    )
+    train_disable_sampling: bool = Field(
+        default=True,
+        description="Skip ai-toolkit's in-training sample renders. Stack eval (cmcstyle + "
+        "<char>_char) is a separate stage; ai-toolkit can only sample the char LoRA alone.",
+    )
+    train_use_ema: bool = Field(
+        default=False,
+        description="Enable ai-toolkit EMA weight smoothing. Off to match the proven "
+        "low-VRAM Flux recipe (ohwxwoman_flux.yaml: use_ema=false); turn on for a "
+        "potentially smoother result if VRAM allows.",
+    )
+    huggingface_token: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "APP_HUGGINGFACE_TOKEN", "HF_TOKEN", "HUGGING_FACE_HUB_TOKEN"
+        ),
+        description="HF token (read from HF_TOKEN) used by ai-toolkit to fetch the gated "
+        "FLUX.1-dev base. Empty is fine when train_base_model is a local path. Secret — "
+        "keep it in .env, never commit it.",
+    )
+
     # --- Pipeline: stage flags (gate which stages 'run-all' executes) ---
     run_import: bool = True
     run_generate: bool = True
     run_clean: bool = True
     run_caption: bool = True
+    # Training is heavy (a GPU + the Flux base) and opt-in: 'run-all' skips it by
+    # default; run it explicitly with `make-char-dataset train`.
+    run_train: bool = False
 
 
 @lru_cache(maxsize=1)

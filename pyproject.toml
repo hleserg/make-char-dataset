@@ -117,6 +117,11 @@ include = ["src", "tests"]
 typeCheckingMode = "standard"
 pythonVersion = "3.12"
 reportMissingTypeStubs = false
+# Pin the project venv so import resolution is deterministic regardless of which
+# environment invokes pyright (uv run, the pre-commit hook's isolated env, or a
+# shell with a different venv active) — all resolve deps against ./.venv.
+venvPath = "."
+venv = ".venv"
 
 [tool.pytest.ini_options]
 minversion = "8.0"

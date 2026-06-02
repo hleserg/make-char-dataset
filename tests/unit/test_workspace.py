@@ -13,6 +13,7 @@ def test_stage_paths_derive_from_root() -> None:
     assert ws.generated == Path("/tmp/ws/01_generated")
     assert ws.clean == Path("/tmp/ws/02_clean")
     assert ws.dataset == Path("/tmp/ws/03_dataset")
+    assert ws.lora == Path("/tmp/ws/06_lora")
     assert ws.manual_review == Path("/tmp/ws/manual_review")
 
 

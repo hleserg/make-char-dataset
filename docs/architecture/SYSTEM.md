@@ -34,6 +34,7 @@ into ~30–40 diverse, in-style variants locally.
 | generate | `01_generated/` | multiply anchors into variants via the injected backend (ComfyUI/diffusers + style LoRA) |
 | clean | `02_clean/` | perceptual-hash dedup + size filter of the generated variants (anchors never enter this stage — they are generation conditioning only) |
 | caption + layout | `03_dataset/<repeats>_<trigger>/` | Character-Locker captions + kohya folder with `.txt` sidecars |
+| train *(opt-in)* | `06_lora/<name>/` | train the character LoRA on Flux.1-dev via ai-toolkit (off by default) |
 | — | `manual_review/` | anything kicked out for a human (near-dups, out-of-spec) |
 
 ## Components
@@ -50,8 +51,18 @@ into ~30–40 diverse, in-style variants locally.
   `tagging` (`Tagger` Protocol → WD14). The heavy generation/captioning backends
   are injected behind Protocols and imported lazily, so the CPU/CI path never pulls
   torch/diffusers/onnxruntime.
-- **orchestrate / cli** — `orchestrate.run_all` chains the stages (resumable,
-  flag-gated); `cli.py` is the thin `make-char-dataset` console entry.
+- **train** *(opt-in)* — `train.py` trains the character LoRA from `03_dataset`
+  into `06_lora/` by shelling out to **ai-toolkit** (not kohya: only it can
+  qint4-quantize the Flux base to fit ~16 GB). Pure config/launch/progress
+  builders behind a `Trainer` Protocol; the heavy run is a subprocess into
+  ai-toolkit's own venv. The trained LoRA is meant to **stack** with the external
+  style LoRA — `Flux + cmcstyle + <char>_char`. See
+  [Char-LoRA training](TRAINING.md). `doctor.py` validates the training
+  environment before a run.
+- **orchestrate / cli** — `orchestrate.run_all` chains the dataset stages
+  (resumable, flag-gated); `train` is last and opt-in (`APP_RUN_TRAIN=false`), so
+  `run-all` runs the dataset stages only unless training is enabled. `cli.py` is
+  the thin `make-char-dataset` console entry (`… | train | doctor | run-all`).
 - **observability** — Sentry init (`send_default_pii=False`) + component tagging.
 
 ## Data flow
@@ -79,6 +90,10 @@ make-char-dataset run-all path/to/<character_id> --trigger kael --repeats 10
 # or a single stage:
 make-char-dataset generate            # uses 00_passport_import already on disk
 make-char-dataset run-all path/to/export --force   # re-run every enabled stage
+
+# opt-in: train the character LoRA from 03_dataset (Flux via ai-toolkit):
+make-char-dataset doctor              # check the training env first (no GPU)
+make-char-dataset train --trigger kael   # -> 06_lora/kael/kael.safetensors
 ```
 
 CI runs the whole pipeline hermetically on the stub backends (`APP_BACKEND=stub`,
