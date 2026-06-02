@@ -172,6 +172,18 @@ class Settings(BaseSettings):
         description="Gradio endpoint of the Gemini proxy Space (Gemini is geo-blocked here, so "
         "every call is relayed through it).",
     )
+    # WD14 fallback (only when APP_CAPTIONER=wd14): the ONNX model + label CSV are
+    # human-provided (HLE-759) and have no defaults, so the stage fails clearly if
+    # wd14 is selected without them rather than crashing deep in onnxruntime.
+    wd14_model_path: str = Field(
+        default="", description="WD14 ONNX model path (required when APP_CAPTIONER=wd14)."
+    )
+    wd14_labels_path: str = Field(
+        default="", description="WD14 selected_tags.csv path (required when APP_CAPTIONER=wd14)."
+    )
+    wd14_threshold: float = Field(
+        default=0.35, ge=0.0, le=1.0, description="WD14 general-tag confidence cutoff."
+    )
 
     # --- Pipeline: char-LoRA training (heavy; opt-in; runs via ai-toolkit) ---
     # The char-LoRA trains on Flux.1-dev so it stacks with the cmcstyle style LoRA

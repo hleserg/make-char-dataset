@@ -340,8 +340,21 @@ def test_make_captioner_stub(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_make_captioner_wd14(monkeypatch: pytest.MonkeyPatch) -> None:
-    settings = _settings(monkeypatch, APP_CAPTIONER="wd14")
+    settings = _settings(
+        monkeypatch,
+        APP_CAPTIONER="wd14",
+        APP_WD14_MODEL_PATH="/models/wd14.onnx",
+        APP_WD14_LABELS_PATH="/models/selected_tags.csv",
+    )
     assert isinstance(_make_captioner(settings), Wd14Captioner)
+
+
+def test_make_captioner_wd14_requires_paths(monkeypatch: pytest.MonkeyPatch) -> None:
+    # wd14 without the human-provided model/labels paths must fail clearly, not crash
+    # later inside onnxruntime.
+    settings = _settings(monkeypatch, APP_CAPTIONER="wd14")
+    with pytest.raises(CaptionError, match="APP_WD14_MODEL_PATH"):
+        _make_captioner(settings)
 
 
 def test_make_captioner_vlm(monkeypatch: pytest.MonkeyPatch) -> None:

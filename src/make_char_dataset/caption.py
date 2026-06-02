@@ -461,10 +461,22 @@ def _make_captioner(settings: Settings) -> Captioner:
     if backend == "stub":
         return StubCaptioner(settings.trigger_token)
     if backend == "wd14":
+        if not settings.wd14_model_path or not settings.wd14_labels_path:
+            raise CaptionError(
+                "APP_CAPTIONER=wd14 needs APP_WD14_MODEL_PATH and APP_WD14_LABELS_PATH "
+                "(the WD14 ONNX model + selected_tags.csv). Use APP_CAPTIONER=vlm (the "
+                "default) or provide the WD14 paths."
+            )
         from make_char_dataset.tagging import WD14Tagger
 
         return Wd14Captioner(
-            WD14Tagger(), settings.trigger_token, style_tokens(settings.style_prompt)
+            WD14Tagger(
+                model_path=settings.wd14_model_path,
+                labels_path=settings.wd14_labels_path,
+                threshold=settings.wd14_threshold,
+            ),
+            settings.trigger_token,
+            style_tokens(settings.style_prompt),
         )
     if backend == "vlm":
         from make_char_dataset.proxy import GeminiProxyClient
