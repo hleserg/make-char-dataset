@@ -1,10 +1,10 @@
-"""Tests for projectname.config."""
+"""Tests for make_char_dataset.config."""
 
 from __future__ import annotations
 
 import pytest
 
-from projectname.config import Settings, get_settings
+from make_char_dataset.config import Settings, get_settings
 
 
 def test_defaults() -> None:

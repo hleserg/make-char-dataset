@@ -7,8 +7,18 @@ non-inferable facts. Style rules live in linters; deep detail lives in
 
 ## Overview
 
-TODO: one paragraph — what this project does and its single most important
-constraint. Replace before first real work.
+`make-char-dataset` turns a character's **passport set** (the golden reference
+output of create-char-passport: `state.json` + role-tagged `refs/`) into a
+**kohya-ready character LoRA dataset** via a resumable, file-driven pipeline
+(passport import → generate → clean/dedup → caption + layout). It is the *local
+multiplication* step: a small set of identity anchors is multiplied into ~30–40
+diverse, in-style variants using a **pre-trained style LoRA** (Style Locker — the
+style lives outside the character) and a license-safe img2img+ControlNet backend.
+The single most important constraint: stages stay **resumable and
+side-effect-contained to their own output folder**, and generation holds
+**character identity** constant while everything else (pose, plan, background,
+lighting) varies — *consistency in the character, diversity in everything else*.
+See `docs/architecture/SYSTEM.md` and `docs/architecture/WORKSPACE.md`.
 
 ## Stack
 
@@ -42,7 +52,7 @@ Also required:
   sensitive data — never weaken scrubbing or log raw user input.
 - **Secrets only in `.env`** (git-ignored). Document new keys in `.env.example`.
   Never hardcode credentials; never read `os.environ` directly — use
-  `projectname.config.get_settings()`.
+  `make_char_dataset.config.get_settings()`.
 - **Conventional Commits** (`feat:`, `fix:`, `feat!:` …). Commits/comments in
   English. Versioning via Commitizen.
 - **Docs are English-canonical**; user-facing docs add an `-ru.md` pair, edited
@@ -68,9 +78,12 @@ Spec: `docs/development/PLAYBOOK_MARKERS.md`. When unsure, add one with
 
 | Path | What |
 |------|------|
-| `src/projectname/` | the package |
-| `src/projectname/config.py` | typed settings (env access lives here only) |
-| `src/projectname/observability/` | Sentry init + component tagging |
+| `src/make_char_dataset/` | the package |
+| `src/make_char_dataset/config.py` | typed settings (env access lives here only) |
+| `src/make_char_dataset/workspace.py` | single-root workspace / stage-folder layout contract |
+| `src/make_char_dataset/assembly.py` | pure dataset core: `Generator` Protocol, dedup, Character-Locker caption, kohya layout |
+| `src/make_char_dataset/observability/` | Sentry init + component tagging |
+| `.claude/skills/verifier-dataset/` | runtime dataset verifier (free no-GPU smoke + heavy GPU tier) |
 | `tests/{unit,integration}/` | tests |
 | `docs/` | architecture (ADRs), dev standard, PLAYBOOK spec |
 | `scripts/` | `init_template.py`, `extract_playbook.py` |
