@@ -70,6 +70,41 @@ venv/bin/huggingface-cli login        # paste a read token
 The HF token is **never** sent over the SSH command line (it would show in remote
 `ps`); the remote uses its own `huggingface-cli` login cache. SSH auth is your key.
 
+## Which provider? (June 2026 snapshot — prices are indicative)
+
+For occasional Flux LoRA training (~3 h, ~24 GB target) + ComfyUI inference, budget-conscious:
+
+| Provider | ~24 GB GPU $/hr | Billing | SSH | Egress | Notes |
+|---|---|---|---|---|---|
+| **RunPod** Community Cloud | RTX 4090 ~$0.34 | per-second | ✓ | free | official ai-toolkit template; community nodes can drop (checkpoint-tolerant); prepaid |
+| **Vast.ai** marketplace | RTX 4090 ~$0.30–0.50 (interruptible from ~$0.29); RTX 3090 from ~$0.12–0.20 | per-second | ✓ | varies | cheapest; host-set, reliability varies; ai-toolkit Flux LoRA proven <$0.50/run |
+| **Salad** | RTX 4090 ~$0.18 | — | — | — | cheapest listed, but distributed/interruptible |
+| **Modal** serverless | A10 ~$1.1 / L4 ~$0.8 | per-second, $0 idle | ✗ (use `run_modal.py`) | — | $30/mo free credits; best for bursty, zero box-babysitting |
+| **Lambda** | A6000 48 GB ~$0.80 / A10 ~$1.29 | per-hour | ✓ | free | clean ML stack, but no cheap consumer GPUs → pricier here |
+
+**Recommendation: RunPod Community Cloud + RTX 4090 (~$0.34/hr ≈ $1 per 3 h run).** Best
+price/speed/quality for us: fast (4090), SSH (works with `APP_TRAIN_BACKEND=ssh`),
+per-second billing, **zero egress**, and an **official ai-toolkit template** so the box
+is ready in minutes. Cheaper still: **Vast.ai** (tolerate marketplace variance). Lowest
+ops for bursty use: **Modal** (serverless, $30/mo free) — but serverless, not our SSH path.
+
+### Do this (RunPod top pick)
+1. Register at runpod.io; add prepaid credit (no KYC for normal use).
+2. Create a **Network Volume** (~80 GB, $0.05–0.07/GB·mo) in a region with RTX 4090s —
+   it persists the FLUX.1-dev cache + datasets between runs (mounts at `/workspace`).
+3. Deploy a Pod: RTX 4090 (Community Cloud), the **ai-toolkit** template (or PyTorch +
+   ~70 GB disk), attach the volume.
+4. SSH in; `huggingface-cli login` (a read token — FLUX.1-dev is gated); the first run
+   downloads the base onto the volume.
+5. Locally: `APP_TRAIN_BACKEND=ssh`, `APP_TRAIN_SSH_HOST=<runpod ssh>`,
+   `APP_TRAIN_SSH_PORT=<port>`, `APP_TRAIN_SSH_WORKDIR=/workspace/make-char-train`,
+   `APP_TRAIN_SSH_AITOOLKIT_DIR=<remote ai-toolkit>` → `make-char-dataset train --trigger kael`.
+6. Eval: run ComfyUI on the pod, tunnel its port, `APP_COMFY_URL=http://localhost:8188`.
+   Stop the pod when done (per-second billing — no idle charge once stopped).
+
+Sources: RunPod, Vast.ai, Modal, Lambda pricing pages + getdeploying / ComputePrices
+cross-provider comparisons (June 2026). Re-check current rates before a run.
+
 ## Cost & recipe notes
 
 - A 24 GB cloud GPU removes the local VRAM tightness, so `APP_TRAIN_QTYPE` can stay
