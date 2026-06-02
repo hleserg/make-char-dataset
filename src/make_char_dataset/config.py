@@ -84,6 +84,11 @@ class Settings(BaseSettings):
         description="License-safe pose/structure guidance: 'openpose', 'depth', or 'none'. "
         "InsightFace-based tools (PuLID/IP-Adapter/InstantID) are forbidden for commercial use.",
     )
+    controlnet_model: str = Field(
+        default="",
+        description="ControlNet checkpoint filename for the chosen mode (human-provided, "
+        "HLE-759); empty disables the ControlNet subgraph until a model is supplied.",
+    )
     img2img_denoise: float = Field(
         default=0.75,
         ge=0.0,
