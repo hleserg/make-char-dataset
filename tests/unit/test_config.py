@@ -31,11 +31,13 @@ def test_reads_environment(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_training_defaults() -> None:
     settings = get_settings()
-    # Char-LoRA trains on Flux via ai-toolkit, opt-in, with qint4 low-VRAM quant.
+    # Char-LoRA trains on Flux via ai-toolkit, opt-in, with qfloat8 low-VRAM quant.
     assert settings.train_tool == "ai-toolkit"
     assert settings.train_base_model == "black-forest-labs/FLUX.1-dev"
     assert settings.train_quantize is True
-    assert settings.train_qtype == "qint4"
+    assert settings.train_qtype == "qfloat8"  # qint4 + low_vram is broken (CUDA-only int4pack)
+    assert settings.train_qtype_te == "qfloat8"
+    assert settings.train_optimizer == "adafactor"
     assert settings.train_low_vram is True
     assert settings.run_train is False
 

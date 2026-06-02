@@ -8,7 +8,7 @@ The centerpiece is ``test_config_matches_proven_flux_recipe``: a green stub prov
 the *plumbing*, not that the emitted config is a valid ai-toolkit job. So we pin
 the generated config's structure to the recipe that actually trained a Flux LoRA
 on this box (ai-toolkit ``config/ohwxwoman_flux.yaml``) — same key nesting, and the
-low-VRAM quantization knobs (``qtype: qint4`` + ``low_vram``) that are the whole
+low-VRAM quantization knobs (``qtype: qfloat8`` + ``low_vram``) that are the whole
 reason we use ai-toolkit over kohya.
 """
 
@@ -186,21 +186,22 @@ def test_config_matches_proven_flux_recipe(monkeypatch: pytest.MonkeyPatch) -> N
     assert dataset["shuffle_tokens"] is False
     assert dataset["resolution"] == [768]
 
-    # train: Flux flow-matching, text-encoder NOT trained, sampling off by default.
+    # train: Flux flow-matching, text-encoder NOT trained, sampling off, low-VRAM optimizer.
     tr = proc["train"]
     assert tr["train_unet"] is True
     assert tr["train_text_encoder"] is False
     assert tr["noise_scheduler"] == "flowmatch"
     assert tr["dtype"] == "bf16"
     assert tr["disable_sampling"] is True
+    assert tr["optimizer"] == "adafactor"  # near-zero state -> fits ~16 GB
 
-    # model: Flux base + the qint4 low-VRAM quantization kohya can't do.
+    # model: Flux base + qfloat8 low-VRAM quantization (NOT qint4 — see the guard test).
     model = proc["model"]
     assert model["name_or_path"] == "black-forest-labs/FLUX.1-dev"
     assert model["is_flux"] is True
     assert model["quantize"] is True
-    assert model["qtype"] == "qint4"
-    assert model["qtype_te"] == "qint4"
+    assert model["qtype"] == "qfloat8"
+    assert model["qtype_te"] == "qfloat8"
     assert model["low_vram"] is True
 
 
@@ -208,19 +209,35 @@ def test_config_honours_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
     settings = _settings(
         monkeypatch,
         APP_TRAIN_BASE_MODEL="/models/flux1-dev.safetensors",
-        APP_TRAIN_QTYPE="qfloat8",
+        APP_TRAIN_QTYPE="qint8",
         APP_TRAIN_LOW_VRAM="false",
         APP_TRAIN_DISABLE_SAMPLING="false",
-        APP_TRAIN_OPTIMIZER="adafactor",
+        APP_TRAIN_OPTIMIZER="adamw8bit",
     )
     proc = build_aitoolkit_config(
         settings, dataset_dir=Path("/d"), training_folder=Path("/o"), output_name="c"
     )["config"]["process"][0]
     assert proc["model"]["name_or_path"] == "/models/flux1-dev.safetensors"
-    assert proc["model"]["qtype"] == "qfloat8"
+    assert proc["model"]["qtype"] == "qint8"
     assert proc["model"]["low_vram"] is False
     assert proc["train"]["disable_sampling"] is False
-    assert proc["train"]["optimizer"] == "adafactor"
+    assert proc["train"]["optimizer"] == "adamw8bit"
+
+
+def test_config_rejects_qint4_with_low_vram(monkeypatch: pytest.MonkeyPatch) -> None:
+    # qint4's int4pack kernel is CUDA-only; low_vram quantizes on CPU -> ai-toolkit
+    # throws and writes no weights. The builder must refuse the combo up front.
+    settings = _settings(monkeypatch, APP_TRAIN_QTYPE="qint4")  # low_vram defaults true
+    with pytest.raises(TrainError, match=r"qint4 .*incompatible with low_vram"):
+        build_aitoolkit_config(
+            settings, dataset_dir=Path("/d"), training_folder=Path("/o"), output_name="c"
+        )
+    # qint4 is fine when low_vram is off (it then quantizes on the GPU).
+    ok = _settings(monkeypatch, APP_TRAIN_QTYPE="qint4", APP_TRAIN_LOW_VRAM="false")
+    proc = build_aitoolkit_config(
+        ok, dataset_dir=Path("/d"), training_folder=Path("/o"), output_name="c"
+    )["config"]["process"][0]
+    assert proc["model"]["qtype"] == "qint4"
 
 
 def test_config_ema_defaults_off_overridable(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -144,7 +144,7 @@ class Settings(BaseSettings):
     # The char-LoRA trains on Flux.1-dev so it stacks with the cmcstyle style LoRA
     # (`Flux + cmcstyle + <char>_char`, HLE-802). Training shells out to ostris
     # ai-toolkit — NOT kohya sd-scripts: kohya loads the whole Flux DiT before
-    # block-swap offload and OOMs ~16 GB, whereas ai-toolkit qint4-quantizes the
+    # block-swap offload and OOMs ~16 GB, whereas ai-toolkit qfloat8-quantizes the
     # transformer + text encoder so Flux LoRA training fits (the bit kohya can't do).
     train_tool: str = Field(
         default="ai-toolkit",
@@ -169,7 +169,7 @@ class Settings(BaseSettings):
         description="char-LoRA filename stem (and ai-toolkit run name); empty uses the "
         "trigger token, so the LoRA is '<trigger>.safetensors'.",
     )
-    train_network_dim: int = Field(default=16, ge=1, description="LoRA rank (network.linear).")
+    train_network_dim: int = Field(default=32, ge=1, description="LoRA rank (network.linear).")
     train_network_alpha: int = Field(
         default=16, ge=1, description="LoRA alpha (network.linear_alpha)."
     )
@@ -181,11 +181,13 @@ class Settings(BaseSettings):
     train_resolution: int = Field(
         default=512,
         ge=64,
-        description="Training/bucket resolution (px). qint4 low-VRAM Flux fits 512 on ~16 GB.",
+        description="Training/bucket resolution (px). Low-VRAM Flux fits 512 on ~16 GB; "
+        "bump to 768 only after a fit-check.",
     )
     train_optimizer: str = Field(
-        default="adamw8bit",
-        description="ai-toolkit optimizer ('adamw8bit', 'adafactor', ...).",
+        default="adafactor",
+        description="ai-toolkit optimizer. adafactor has near-zero optimizer state, so it "
+        "fits ~16 GB; adamw8bit needs more VRAM.",
     )
     train_save_every: int = Field(
         default=250, ge=1, description="Save an intermittent LoRA every N steps."
@@ -198,12 +200,18 @@ class Settings(BaseSettings):
         description="Quantize the Flux base for low-VRAM training (ai-toolkit; kohya cannot).",
     )
     train_qtype: str = Field(
-        default="qint4", description="Transformer quantization type (qint4 fits ~16 GB)."
+        default="qfloat8",
+        description="Transformer quantization type. Use 'qfloat8' — fp8 casts on CPU under "
+        "low_vram. NOT 'qint4': its int4pack kernel is CUDA-only and clashes with low_vram's "
+        "CPU quantization, throwing and silently producing no weights.",
     )
-    train_qtype_te: str = Field(default="qint4", description="Text-encoder quantization type.")
+    train_qtype_te: str = Field(
+        default="qfloat8", description="Text-encoder quantization type (see train_qtype)."
+    )
     train_low_vram: bool = Field(
         default=True,
-        description="ai-toolkit low_vram mode (quantize on CPU; slower, far less VRAM).",
+        description="ai-toolkit low_vram mode (quantize on CPU; slower, far less VRAM). "
+        "Mandatory here — the GPU drives the display, so the load peak must stay low.",
     )
     train_disable_sampling: bool = Field(
         default=True,

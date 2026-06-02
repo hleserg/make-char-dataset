@@ -9,7 +9,7 @@ The char-LoRA must train on **FLUX.1-dev** so it stacks with the cmcstyle style
 LoRA (``Flux + cmcstyle + <char>_char``, HLE-802). kohya loads the whole Flux DiT
 to the GPU before block-swap offload and OOMs on ~16 GB; it has no sub-fp8
 *training* quantization. ai-toolkit can quantize the transformer + text encoder to
-**qint4** with ``low_vram``, which fits ~16 GB — the part kohya cannot do.
+**qfloat8** with ``low_vram``, which fits ~16 GB — the part kohya cannot do.
 
 Pure-core-lazy-backend (the same split as ``generate.py``/``caption.py``): the
 ai-toolkit config builder, the launch-command builder and the stdout progress
@@ -255,13 +255,18 @@ def build_aitoolkit_config(
 ) -> dict[str, Any]:
     """Build the ai-toolkit job config (pure; no I/O).
 
-    Mirrors the proven FLUX.1-dev LoRA recipe (``config/ohwxwoman_flux.yaml``): a
-    single ``sd_trainer`` process, LoRA network, the kohya dataset folder as the
-    only subset, content+identity captions kept as-is (``shuffle_tokens: false`` so
-    the leading ``<char>_char`` trigger token stays pinned), and — the bit kohya
-    cannot do — ``model.quantize`` with ``qtype``/``qtype_te`` + ``low_vram`` so
-    Flux training fits ~16 GB. Style is held by the external cmcstyle LoRA at
-    inference, so it is never written into captions here.
+    Mirrors the FLUX.1-dev LoRA recipe proven to actually train + save on this box
+    (the style-lora agent's handoff): a single ``sd_trainer`` process, LoRA network,
+    the kohya dataset folder as the only subset, content+identity captions kept
+    as-is (``shuffle_tokens: false`` so the leading ``<char>_char`` trigger stays
+    pinned), and — the bit kohya cannot do — ``model.quantize`` with
+    ``qtype``/``qtype_te`` (**qfloat8**) + ``low_vram`` so Flux training fits ~16 GB.
+    Style is held by the external cmcstyle LoRA at inference, so it is never written
+    into captions here.
+
+    Raises :class:`TrainError` for the known-broken ``qint4`` + ``low_vram`` combo:
+    qint4's int4pack kernel is CUDA-only while ``low_vram`` quantizes on the CPU, so
+    ai-toolkit throws and silently emits a config but **no** ``.safetensors``.
     """
     tool = settings.train_tool.strip().lower()
     if tool not in SUPPORTED_TOOLS:
@@ -270,6 +275,20 @@ def build_aitoolkit_config(
         raise TrainError(
             "train_base_model is empty; set APP_TRAIN_BASE_MODEL to the Flux base "
             "(e.g. 'black-forest-labs/FLUX.1-dev') — it must match the style LoRA's base."
+        )
+    if (
+        settings.train_quantize
+        and settings.train_low_vram
+        and (
+            settings.train_qtype.strip().lower() == "qint4"
+            or settings.train_qtype_te.strip().lower() == "qint4"
+        )
+    ):
+        raise TrainError(
+            "qint4 quantization is incompatible with low_vram: int4pack is a CUDA-only "
+            "kernel but low_vram quantizes on the CPU, so ai-toolkit throws and writes no "
+            "weights. Use APP_TRAIN_QTYPE=qfloat8 (and APP_TRAIN_QTYPE_TE=qfloat8), or "
+            "disable APP_TRAIN_LOW_VRAM."
         )
     process: dict[str, Any] = {
         "type": "sd_trainer",
@@ -286,7 +305,9 @@ def build_aitoolkit_config(
         "save": {
             "dtype": "float16",
             "save_every": settings.train_save_every,
-            "max_step_saves_to_keep": 4,
+            # Keep several so the best checkpoint can be picked by eval (likeness vs
+            # prompt flexibility), not just the last.
+            "max_step_saves_to_keep": 8,
             "push_to_hub": False,
         },
         "datasets": [

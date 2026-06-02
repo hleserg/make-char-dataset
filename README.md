@@ -45,7 +45,7 @@ injected behind a Protocol, so tests and CI run with no GPU.
 The char-LoRA trains on **Flux.1-dev** so it stacks with the comic **style** LoRA
 (`Flux + cmcstyle + <char>_char`). Training shells out to
 [ostris **ai-toolkit**](https://github.com/ostris/ai-toolkit) — not kohya — because
-only it can `qint4`-quantize the Flux base to fit ~16 GB VRAM. See
+only it can `qfloat8`-quantize the Flux base to fit ~16 GB VRAM. See
 [docs/architecture/TRAINING.md](docs/architecture/TRAINING.md).
 
 ```bash
