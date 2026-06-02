@@ -22,8 +22,10 @@ the grid + ``--dry-run`` work with no GPU and no ComfyUI server.
 
 from __future__ import annotations
 
+import hashlib
 import io
 import json
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
@@ -205,10 +207,10 @@ def _font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
     return ImageFont.load_default()  # pragma: no cover - only if no TrueType font is installed
 
 
-def _mode_label(mode: str, char_trigger: str) -> str:
+def _mode_label(mode: str, char_trigger: str, style_trigger: str) -> str:
     return {
         "base": "base (no LoRA)",
-        "style": "cmcstyle only",
+        "style": f"{style_trigger} only",
         "char": f"{char_trigger} only",
         "stack": "stack (both)",
     }.get(mode, mode)
@@ -219,6 +221,7 @@ def assemble_grid(
     scenes: Sequence[str],
     char_trigger: str,
     *,
+    style_trigger: str = "cmcstyle",
     modes: Sequence[str] = MODES,
     thumb: int = 320,
     label_w: int = 240,
@@ -233,7 +236,7 @@ def assemble_grid(
     for col, mode in enumerate(modes):
         draw.text(
             (label_w + col * thumb + 8, 8),
-            _mode_label(mode, char_trigger),
+            _mode_label(mode, char_trigger, style_trigger),
             fill=(20, 20, 20),
             font=head_font,
         )
@@ -319,8 +322,9 @@ class StubStackSampler:
     size: int = 64
 
     def sample(self, graph: dict) -> bytes:
-        """Return a small PNG whose colour is a deterministic hash of the graph."""
-        digest = abs(hash(json.dumps(graph, sort_keys=True)))
+        """Return a small PNG whose colour is a stable hash of the graph (per-cell distinct)."""
+        raw = json.dumps(graph, sort_keys=True).encode()
+        digest = int(hashlib.sha1(raw, usedforsecurity=False).hexdigest()[:8], 16)
         colour = (digest % 256, (digest // 256) % 256, (digest // 65536) % 256)
         buffer = io.BytesIO()
         Image.new("RGB", (self.size, self.size), colour).save(buffer, format="PNG")
@@ -331,9 +335,13 @@ class StubStackSampler:
 
 
 def resolve_char_lora(settings: Settings) -> str:
-    """Char-LoRA filename for eval: ``eval_char_lora_path`` or the trained output stem."""
+    """Char-LoRA filename for eval: ``eval_char_lora_path`` or the trained output stem.
+
+    Reduced to a basename (like the style LoRA) because ComfyUI's
+    ``LoraLoaderModelOnly`` resolves ``lora_name`` relative to ``models/loras``.
+    """
     if settings.eval_char_lora_path.strip():
-        return settings.eval_char_lora_path.strip()
+        return Path(settings.eval_char_lora_path.strip()).name
     name = settings.train_output_name.strip() or settings.trigger_token
     return f"{name}.safetensors"
 
@@ -392,7 +400,9 @@ def run_eval(*, sampler: StackSampler | None = None, dry_run: bool = False) -> P
     runner = sampler if sampler is not None else ComfyStackSampler(settings.comfy_url)
 
     images: dict[tuple[int, str], Image.Image | None] = {}
-    for cell in make_cells(prompts):
+    cells = make_cells(prompts)
+    rendered = 0
+    for cell in cells:
         graph = build_flux_workflow(
             prompt=cell.prompt,
             loras=loras_for_mode(
@@ -418,9 +428,26 @@ def run_eval(*, sampler: StackSampler | None = None, dry_run: bool = False) -> P
             )
             images[(cell.row, cell.mode)] = None
             continue
-        images[(cell.row, cell.mode)] = Image.open(io.BytesIO(runner.sample(graph)))
+        # Tolerate a per-cell failure (a flaky network / one bad mode) — render the
+        # cell as a hole and keep the rest of the grid, like the reference harness.
+        try:
+            images[(cell.row, cell.mode)] = Image.open(io.BytesIO(runner.sample(graph)))
+            rendered += 1
+        except Exception as exc:
+            print(f"eval cell row {cell.row} [{cell.mode}] FAILED: {exc}", file=sys.stderr)
+            images[(cell.row, cell.mode)] = None
 
-    grid = assemble_grid(images, scenes, settings.trigger_token)
+    # Fail loudly if nothing rendered (e.g. ComfyUI down) — don't pass off an
+    # all-holes sheet as a successful eval.
+    if not dry_run and cells and rendered == 0:
+        raise EvalError(
+            f"no eval cells rendered (0/{len(cells)}). Is ComfyUI reachable at "
+            f"{settings.comfy_url}? Start it, or use --dry-run."
+        )
+
+    grid = assemble_grid(
+        images, scenes, settings.trigger_token, style_trigger=settings.eval_style_trigger
+    )
     grid_path = out / GRID_FILENAME
     grid.save(grid_path)
     (out / MANIFEST_FILENAME).write_text(

@@ -169,8 +169,9 @@ def test_stub_sampler_is_deterministic_png() -> None:
 
 
 def test_resolve_char_lora_explicit(monkeypatch: pytest.MonkeyPatch) -> None:
+    # reduced to a basename — ComfyUI resolves lora_name relative to models/loras
     settings = _settings(monkeypatch, APP_EVAL_CHAR_LORA_PATH="/loras/kael_v2.safetensors")
-    assert resolve_char_lora(settings) == "/loras/kael_v2.safetensors"
+    assert resolve_char_lora(settings) == "kael_v2.safetensors"
 
 
 def test_resolve_char_lora_derived(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -248,3 +249,36 @@ def test_run_eval_dry_run_writes_graphs_no_images(
     assert len(graphs) == len(load_scenes(get_settings())) * len(MODES)
     # the dry-run graphs are valid JSON ComfyUI graphs
     assert json.loads(graphs[0].read_text(encoding="utf-8"))["40"]["class_type"] == "KSampler"
+
+
+def test_run_eval_tolerates_a_cell_failure(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    ws = _configure(monkeypatch, tmp_path)
+
+    class FlakyOnce:
+        def __init__(self) -> None:
+            self.calls = 0
+            self._stub = StubStackSampler(size=16)
+
+        def sample(self, graph: dict) -> bytes:
+            self.calls += 1
+            if self.calls == 1:  # one transient failure -> that cell becomes a hole
+                raise RuntimeError("transient sampler error")
+            return self._stub.sample(graph)
+
+    grid = run_eval(sampler=FlakyOnce())
+    assert grid.is_file()  # the rest of the grid is still written despite one hole
+    assert (ws.eval_dir / MANIFEST_FILENAME).is_file()
+
+
+def test_run_eval_raises_when_no_cell_renders(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _configure(monkeypatch, tmp_path)
+
+    class AlwaysFails:
+        def sample(self, graph: dict) -> bytes:
+            raise RuntimeError("comfy down")
+
+    # every cell failing (e.g. ComfyUI down) must fail loudly, not write an all-holes sheet
+    with pytest.raises(EvalError, match="no eval cells rendered"):
+        run_eval(sampler=AlwaysFails())

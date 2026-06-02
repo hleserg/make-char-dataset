@@ -36,8 +36,8 @@ make-char-dataset eval --trigger kael      # -> 07_eval/stack_eval_grid.png + st
 ```
 
 The style LoRA comes from `APP_STYLE_LORA_PATH`; the char LoRA from
-`APP_EVAL_CHAR_LORA_PATH` (or derived as `<trigger>.safetensors` from the trained
-output). Sample at guidance ~3.5 (inference), a fixed seed so cells are comparable.
+`APP_EVAL_CHAR_LORA_PATH` (or derived as `<train_output_name|trigger>.safetensors`
+from the trained output). Both are taken as basenames relative to `models/loras`. Sample at guidance ~3.5 (inference), a fixed seed so cells are comparable.
 All knobs are `APP_EVAL_*` (see `.env.example`).
 
 ## Design
