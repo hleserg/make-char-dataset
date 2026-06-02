@@ -48,7 +48,10 @@ make-char-dataset train --trigger kael   # -> local 06_lora/kael/kael.safetensor
 ```
 
 The local default (`APP_TRAIN_BACKEND=local`) is unchanged; flip the flag back to
-train on this box.
+train on this box. `APP_TRAIN_SSH_WORKDIR` may be `~/…` (the `~` is resolved to the
+remote `$HOME` so the path baked into ai-toolkit's config is absolute) or an absolute
+path (e.g. RunPod's persistent `/workspace/…`). Keep the SSH paths and the trigger
+token shell-safe (no spaces/metacharacters).
 
 ### Provision the remote box once
 

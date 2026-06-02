@@ -181,16 +181,26 @@ class SshAiToolkitTrainer:  # pragma: no cover - drives ssh/rsync to a remote GP
         settings = self._settings
         host = settings.train_ssh_host.strip()
         port = settings.train_ssh_port
-        workdir = settings.train_ssh_workdir.rstrip("/")
         dataset_name = plan.dataset_dir.name
-        remote_dataset = f"{workdir}/03_dataset/{dataset_name}"
-        remote_config = f"{workdir}/aitoolkit_config.json"
-        remote_log = f"{workdir}/train.log"
-        remote_run_dir = f"{workdir}/06_lora/{plan.output_name}"
 
         def run(argv: list[str]) -> None:
             print("+", shlex.join(argv))
             subprocess.run(argv, check=True)  # nosec B603 - argv list, shell=False
+
+        # Resolve the remote $HOME so the workdir baked into the JSON config is
+        # ABSOLUTE: ai-toolkit reads folder_path/training_folder with plain os.path
+        # (no ~ expansion), unlike the shell parts (rsync/cd) which do expand ~.
+        home = subprocess.run(  # nosec B603 - argv list, shell=False
+            build_ssh_command(host, "echo $HOME", port=port),
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        workdir = expand_remote_workdir(settings.train_ssh_workdir, home)
+        remote_dataset = f"{workdir}/03_dataset/{dataset_name}"
+        remote_config = f"{workdir}/aitoolkit_config.json"
+        remote_log = f"{workdir}/train.log"
+        remote_run_dir = f"{workdir}/06_lora/{plan.output_name}"
 
         run(build_ssh_command(host, f"mkdir -p {remote_dataset} {workdir}/06_lora", port=port))
         run(
@@ -207,7 +217,10 @@ class SshAiToolkitTrainer:  # pragma: no cover - drives ssh/rsync to a remote GP
         config_tmp = plan.config_path.parent / "aitoolkit_config.remote.json"
         config_tmp.parent.mkdir(parents=True, exist_ok=True)
         config_tmp.write_text(remote_config_json, encoding="utf-8")
-        run(build_rsync_command(config_tmp.as_posix(), f"{host}:{remote_config}", port=port))
+        try:
+            run(build_rsync_command(config_tmp.as_posix(), f"{host}:{remote_config}", port=port))
+        finally:
+            config_tmp.unlink(missing_ok=True)  # don't leave a stray remote config in 06_lora/
 
         ssh_run = build_ssh_command(
             host,
@@ -494,6 +507,23 @@ def resolve_ssh_python(settings: Settings) -> str:
     if settings.train_ssh_python.strip():
         return settings.train_ssh_python.strip()
     return f"{settings.train_ssh_aitoolkit_dir.rstrip('/')}/venv/bin/python"
+
+
+def expand_remote_workdir(workdir: str, remote_home: str) -> str:
+    """Resolve a leading ``~`` in the remote workdir against ``remote_home`` (pure).
+
+    The workdir is baked into the ai-toolkit JSON config, which ai-toolkit reads with
+    plain ``os.path`` (no ``~`` expansion) — so it must be absolute. (The shell parts
+    — rsync targets, ``cd`` — expand ``~`` themselves, so the aitoolkit-dir token is
+    fine; only the config-embedded paths need this.) Absolute paths pass through.
+    """
+    workdir = workdir.strip().rstrip("/")
+    home = remote_home.strip().rstrip("/")
+    if workdir == "~":
+        return home
+    if workdir.startswith("~/"):
+        return f"{home}/{workdir[2:]}"
+    return workdir
 
 
 def rewrite_config_for_remote(config_json: str, *, remote_workdir: str, dataset_name: str) -> str:

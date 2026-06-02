@@ -33,6 +33,7 @@ from make_char_dataset.train import (
     build_ssh_command,
     build_subprocess_env,
     dataset_images,
+    expand_remote_workdir,
     expected_output_path,
     make_trainer,
     parse_progress,
@@ -380,12 +381,23 @@ def test_rewrite_config_for_remote() -> None:
         output_name="kael",
     )
     remote_json = rewrite_config_for_remote(
-        render_config(local), remote_workdir="~/work", dataset_name="10_kael"
+        render_config(local), remote_workdir="/root/work", dataset_name="10_kael"
     )
     proc = json.loads(remote_json)["config"]["process"][0]
-    assert proc["training_folder"] == "~/work/06_lora"
-    assert proc["datasets"][0]["folder_path"] == "~/work/03_dataset/10_kael"
+    assert proc["training_folder"] == "/root/work/06_lora"
+    assert proc["datasets"][0]["folder_path"] == "/root/work/03_dataset/10_kael"
     assert proc["model"]["qtype"] == "qfloat8"  # the recipe is untouched
+
+
+def test_expand_remote_workdir() -> None:
+    # ai-toolkit reads config paths with plain os.path, so ~ must be resolved to an
+    # absolute remote path; absolute workdirs pass through unchanged.
+    assert expand_remote_workdir("~/make-char-train", "/root") == "/root/make-char-train"
+    assert expand_remote_workdir("~", "/home/u") == "/home/u"
+    assert expand_remote_workdir("/workspace/train", "/root") == "/workspace/train"
+    assert (
+        expand_remote_workdir("~/train/", "/root/") == "/root/train"
+    )  # trailing slashes normalized
 
 
 def test_build_ssh_command() -> None:
