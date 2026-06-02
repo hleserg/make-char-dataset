@@ -63,6 +63,37 @@ diffusers weights, plus the inputs tracked in the Linear "human inputs" task:
   PuLID / IP-Adapter / InstantID for the commercial dataset (HLE-668),
 - a real **passport export** to multiply.
 
+## Exposing a local UI / service to the LAN (WSL networking)
+
+> **THE RULE: a WSL service must listen on `0.0.0.0` inside WSL, never `127.0.0.1`.**
+
+Windows reaches a WSL service through the WSL distro's **eth0 IP** (e.g.
+`172.22.x.x`) via a `netsh portproxy`; a service bound to WSL **loopback**
+(`127.0.0.1`) is invisible to that proxy and unreachable from the host or LAN. Bind
+any server (a generation UI, a verifier) to `0.0.0.0`.
+
+**Reaching it from the Windows host / another LAN machine (Windows 10):**
+
+> WSL **mirrored networking** (`networkingMode=mirrored`, no portproxy needed)
+> requires **Windows 11 22H2+**; on Windows 10 the `.wslconfig` line is ignored and
+> WSL falls back to NAT — so you need a host-side portproxy + firewall rule.
+
+```powershell
+# Elevated PowerShell. Re-derive the WSL IP (it changes when WSL restarts):
+$ip = (wsl hostname -I).Trim().Split(' ')[0]; "WSL IP = $ip"
+$port = 7860
+netsh interface portproxy delete v4tov4 listenaddress=0.0.0.0 listenport=$port 2>$null
+netsh interface portproxy add    v4tov4 listenaddress=0.0.0.0 listenport=$port connectaddress=$ip connectport=$port
+netsh advfirewall firewall delete rule name=WSL_LAN_$port 2>$null
+netsh advfirewall firewall add    rule name=WSL_LAN_$port dir=in action=allow protocol=TCP localport=$port remoteip=LocalSubnet
+```
+
+Then open `http://<windows-LAN-IP>:<port>` from any LAN machine (or `localhost:<port>`
+on the host). To survive reboots/WSL restarts, drive that script from a Scheduled Task
+on logon + a short interval; `schtasks /Create` is more robust than
+`Register-ScheduledTask` on localized / non-domain Windows. Prefer a LAN-scoped
+(`remoteip=LocalSubnet`) firewall rule over disabling the firewall.
+
 ## Keep the code OS-agnostic
 
 The pipeline should keep running on Windows too:
