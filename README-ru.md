@@ -45,6 +45,11 @@ make-char-dataset doctor              # проверить окружение о
 make-char-dataset train --trigger kael   # -> 06_lora/kael/kael.safetensors
 ```
 
+Тяжёлые шаги можно гонять на **дешёвой облачной GPU**, не меняя локальный дефолт:
+обучение — опциональный SSH-бэкенд (`APP_TRAIN_BACKEND=ssh`), инференс — указав
+`APP_COMFY_URL` на удалённый ComfyUI. См.
+[docs/architecture/CLOUD.md](docs/architecture/CLOUD.md).
+
 ## Быстрый старт
 
 ```bash

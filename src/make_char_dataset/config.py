@@ -279,6 +279,33 @@ class Settings(BaseSettings):
         "keep it in .env, never commit it.",
     )
 
+    # --- Pipeline: remote/cloud training (opt-in; SSH to any rented GPU box) ---
+    # Run the heavy Flux training on a cheap cloud GPU without changing the local
+    # default. The remote box is provisioned once (ai-toolkit + venv + HF login +
+    # the FLUX.1-dev cache) — see docs/architecture/CLOUD.md.
+    train_backend: str = Field(
+        default="local",
+        description="Where training runs: 'local' (spawn the local ai-toolkit venv) or 'ssh' "
+        "(rsync the dataset to a remote GPU, run ai-toolkit there, rsync the LoRA back).",
+    )
+    train_ssh_host: str = Field(
+        default="",
+        description="Remote target for ssh/rsync (user@host or an ~/.ssh/config alias); "
+        "required when train_backend='ssh'.",
+    )
+    train_ssh_port: int = Field(default=22, ge=1, description="SSH port of the remote GPU box.")
+    train_ssh_workdir: str = Field(
+        default="~/make-char-train",
+        description="Remote working dir for the uploaded dataset/config and the LoRA output.",
+    )
+    train_ssh_aitoolkit_dir: str = Field(
+        default="~/ai-toolkit", description="ai-toolkit clone path ON THE REMOTE box."
+    )
+    train_ssh_python: str = Field(
+        default="",
+        description="Remote interpreter; empty uses <train_ssh_aitoolkit_dir>/venv/bin/python.",
+    )
+
     # --- Pipeline: in-stack eval grid (Flux + cmcstyle + <char>_char; opt-in) ---
     # The DoD acceptance harness: render trigger-isolation cells (base / cmcstyle-only
     # / <char>_char-only / stack) through ComfyUI so a human can judge that identity

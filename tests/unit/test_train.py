@@ -22,20 +22,27 @@ import pytest
 from make_char_dataset.config import Settings, get_settings
 from make_char_dataset.train import (
     AiToolkitTrainer,
+    SshAiToolkitTrainer,
     TrainError,
     TrainPlan,
     TrainProgress,
     build_aitoolkit_config,
     build_launch_command,
     build_plan,
+    build_rsync_command,
+    build_ssh_command,
     build_subprocess_env,
     dataset_images,
+    expand_remote_workdir,
     expected_output_path,
     make_trainer,
     parse_progress,
+    remote_train_shell,
     render_config,
     resolve_output_name,
     resolve_python,
+    resolve_ssh_python,
+    rewrite_config_for_remote,
     run_train,
 )
 from make_char_dataset.workspace import Workspace
@@ -339,6 +346,102 @@ def test_make_trainer_rejects_unknown_tool(monkeypatch: pytest.MonkeyPatch) -> N
         make_trainer(settings)
 
 
+# --- remote (ssh / cloud) training -----------------------------------------
+
+
+def test_make_trainer_ssh(monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = _settings(monkeypatch, APP_TRAIN_BACKEND="ssh", APP_TRAIN_SSH_HOST="gpu@cloud")
+    assert isinstance(make_trainer(settings), SshAiToolkitTrainer)
+
+
+def test_make_trainer_ssh_requires_host(monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = _settings(monkeypatch, APP_TRAIN_BACKEND="ssh")  # no host
+    with pytest.raises(TrainError, match="APP_TRAIN_SSH_HOST"):
+        make_trainer(settings)
+
+
+def test_make_trainer_rejects_unknown_backend(monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = _settings(monkeypatch, APP_TRAIN_BACKEND="kubernetes")
+    with pytest.raises(TrainError, match="train_backend="):
+        make_trainer(settings)
+
+
+def test_resolve_ssh_python(monkeypatch: pytest.MonkeyPatch) -> None:
+    default = _settings(monkeypatch, APP_TRAIN_SSH_AITOOLKIT_DIR="/opt/ai-toolkit")
+    assert resolve_ssh_python(default) == "/opt/ai-toolkit/venv/bin/python"
+    override = _settings(monkeypatch, APP_TRAIN_SSH_PYTHON="/usr/bin/python3")
+    assert resolve_ssh_python(override) == "/usr/bin/python3"
+
+
+def test_rewrite_config_for_remote() -> None:
+    local = build_aitoolkit_config(
+        get_settings(),  # default trigger; paths get rewritten below
+        dataset_dir=Path("/ws/03_dataset/10_kael"),
+        training_folder=Path("/ws/06_lora"),
+        output_name="kael",
+    )
+    remote_json = rewrite_config_for_remote(
+        render_config(local), remote_workdir="/root/work", dataset_name="10_kael"
+    )
+    proc = json.loads(remote_json)["config"]["process"][0]
+    assert proc["training_folder"] == "/root/work/06_lora"
+    assert proc["datasets"][0]["folder_path"] == "/root/work/03_dataset/10_kael"
+    assert proc["model"]["qtype"] == "qfloat8"  # the recipe is untouched
+
+
+def test_expand_remote_workdir() -> None:
+    # ai-toolkit reads config paths with plain os.path, so ~ must be resolved to an
+    # absolute remote path; absolute workdirs pass through unchanged.
+    assert expand_remote_workdir("~/make-char-train", "/root") == "/root/make-char-train"
+    assert expand_remote_workdir("~", "/home/u") == "/home/u"
+    assert expand_remote_workdir("/workspace/train", "/root") == "/workspace/train"
+    assert (
+        expand_remote_workdir("~/train/", "/root/") == "/root/train"
+    )  # trailing slashes normalized
+
+
+def test_build_ssh_command() -> None:
+    assert build_ssh_command("gpu@cloud", "echo hi") == ["ssh", "gpu@cloud", "echo hi"]
+    assert build_ssh_command("gpu@cloud", "echo hi", port=2222) == [
+        "ssh",
+        "-p",
+        "2222",
+        "gpu@cloud",
+        "echo hi",
+    ]
+
+
+def test_build_rsync_command() -> None:
+    assert build_rsync_command("a/", "h:b/", delete=True) == [
+        "rsync",
+        "-az",
+        "--delete",
+        "a/",
+        "h:b/",
+    ]
+    assert build_rsync_command("h:b/", "a/", port=2222) == [
+        "rsync",
+        "-az",
+        "-e",
+        "ssh -p 2222",
+        "h:b/",
+        "a/",
+    ]
+
+
+def test_remote_train_shell(monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = _settings(monkeypatch, APP_TRAIN_SSH_AITOOLKIT_DIR="/opt/ai-toolkit")
+    shell = remote_train_shell(
+        settings,
+        remote_config="~/w/cfg.json",
+        remote_log="~/w/train.log",
+        remote_run_dir="~/w/06_lora/kael",
+    )
+    assert "rm -rf ~/w/06_lora/kael" in shell  # fresh save_root → no stale resume
+    assert "cd /opt/ai-toolkit" in shell
+    assert "/opt/ai-toolkit/venv/bin/python run.py ~/w/cfg.json -l ~/w/train.log" in shell
+
+
 # --- build_plan + run_train ------------------------------------------------
 
 
@@ -367,6 +470,8 @@ def test_build_plan_wires_paths(monkeypatch: pytest.MonkeyPatch) -> None:
     assert plan.config_path == Path("/ws/06_lora/aitoolkit_config.json")
     assert plan.cwd == settings.aitoolkit_dir
     assert plan.command[:3] == ["/venv/py", "run.py", "/ws/06_lora/aitoolkit_config.json"]
+    assert plan.dataset_dir == Path("/ws/03_dataset/10_kael")  # source the ssh backend uploads
+    assert plan.output_name == "kael"
     # config_json round-trips and points the dataset at our kohya folder.
     config = json.loads(plan.config_json)
     assert config["config"]["process"][0]["datasets"][0]["folder_path"] == "/ws/03_dataset/10_kael"
