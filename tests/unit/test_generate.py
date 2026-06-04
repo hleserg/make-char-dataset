@@ -10,7 +10,12 @@ from pathlib import Path
 import pytest
 from PIL import Image
 
-from make_char_dataset.backends.comfy import ComfyBackend
+from make_char_dataset.backends.comfy import (
+    ComfyBackend,
+    FluxImg2ImgBackend,
+    _combine_prompt,
+    _extract_error,
+)
 from make_char_dataset.config import get_settings
 from make_char_dataset.generate import (
     SHOT_CLASSES,
@@ -380,3 +385,175 @@ def test_comfy_controlnet_requires_both_model_and_mode() -> None:
     assert "ControlNetApply" not in {
         n["class_type"] for n in no_model._build_workflow(pose, "a.png").values()
     }
+
+
+# --- Flux restylization backend (HLE-804) -----------------------------------
+
+
+def test_flux_build_workflow_img2img_wires_style_lora() -> None:
+    backend = FluxImg2ImgBackend(
+        style_lora_path="/models/loras/cmcstyle_1400.safetensors",
+        style_lora_weight=0.85,
+        style_prompt="cmcstyle",
+        guidance=3.5,
+        steps=20,
+    )
+    spec = VariantSpec(7, "full_body", "serg0.png", "a man standing", 1234, 0.5, "none", "768x1152")
+    graph = backend._build_workflow(spec, "serg0.png")
+
+    class_types = {node["class_type"] for node in graph.values()}
+    # split Flux loaders, not a single SDXL checkpoint
+    assert {"UNETLoader", "DualCLIPLoader", "VAELoader"} <= class_types
+    assert "CheckpointLoaderSimple" not in class_types
+    # img2img (anchor -> latent), NOT txt2img from an empty latent
+    assert {"LoadImage", "ImageScale", "VAEEncode"} <= class_types
+    assert "EmptySD3LatentImage" not in class_types
+    # Flux conditioning + style LoRA
+    assert {"FluxGuidance", "LoraLoaderModelOnly"} <= class_types
+    # license-safe: never InsightFace-based nodes
+    assert not class_types & {"PuLID", "IPAdapter", "IPAdapterApply", "InstantID"}
+
+    # edges, not just membership
+    assert graph["16"]["inputs"]["width"] == 768  # bucket lands on the scaler...
+    assert graph["16"]["inputs"]["height"] == 1152
+    assert "width" not in graph["40"]["inputs"]  # ...not on KSampler (img2img)
+    assert graph["17"]["inputs"]["pixels"] == ["16", 0]  # encode the scaled anchor
+    assert graph["17"]["inputs"]["vae"] == ["12", 0]
+    assert graph["40"]["inputs"]["latent_image"] == ["17", 0]
+    assert graph["13"]["inputs"]["model"] == ["10", 0]  # style LoRA chains off the UNet
+    assert graph["13"]["inputs"]["lora_name"] == "cmcstyle_1400.safetensors"  # basename only
+    assert graph["40"]["inputs"]["model"] == ["13", 0]  # ...and rewires the sampler's model
+    assert graph["40"]["inputs"]["positive"] == ["21", 0]  # via FluxGuidance
+    assert graph["21"]["inputs"]["conditioning"] == ["20", 0]
+    assert graph["21"]["inputs"]["guidance"] == 3.5
+    assert graph["40"]["inputs"]["negative"] == ["22", 0]
+    assert graph["22"]["inputs"]["text"] == ""  # empty negative (cfg 1.0)
+    assert graph["40"]["inputs"]["cfg"] == 1.0  # Flux steers via FluxGuidance
+    assert graph["40"]["inputs"]["denoise"] == 0.5  # the calibrated identity/style knob
+    assert graph["40"]["inputs"]["steps"] == 20
+    assert "cmcstyle" in graph["20"]["inputs"]["text"]  # style trigger folded in
+    assert "a man standing" in graph["20"]["inputs"]["text"]
+
+
+def test_flux_build_workflow_degrades_without_style_lora() -> None:
+    backend = FluxImg2ImgBackend()  # no style LoRA configured
+    spec = VariantSpec(0, "portrait", "a.png", "a man", 1, 0.6, "none", "768x768")
+    graph = backend._build_workflow(spec, "a.png")
+
+    assert "LoraLoaderModelOnly" not in {node["class_type"] for node in graph.values()}
+    assert graph["40"]["inputs"]["model"] == ["10", 0]  # sampler reads the UNet directly
+    assert graph["17"]["inputs"]["pixels"] == ["16", 0]  # img2img still wired
+    assert graph["20"]["inputs"]["text"] == "a man"  # no style prompt appended
+
+
+def test_flux_backend_uses_configured_model_filenames() -> None:
+    backend = FluxImg2ImgBackend(
+        unet="flux1-dev-fp8.safetensors",
+        clip_l="clip_l.safetensors",
+        t5xxl="t5xxl_fp8_e4m3fn.safetensors",
+        vae="ae.safetensors",
+    )
+    spec = VariantSpec(0, "full_body", "a.png", "a man", 1, 0.5, "none", "768x1152")
+    graph = backend._build_workflow(spec, "a.png")
+    assert graph["10"]["inputs"]["unet_name"] == "flux1-dev-fp8.safetensors"
+    assert graph["11"]["inputs"]["clip_name1"] == "clip_l.safetensors"
+    assert graph["11"]["inputs"]["clip_name2"] == "t5xxl_fp8_e4m3fn.safetensors"
+    assert graph["11"]["inputs"]["type"] == "flux"
+    assert graph["12"]["inputs"]["vae_name"] == "ae.safetensors"
+
+
+def test_select_backend_flux_routes_to_flux_backend(monkeypatch: pytest.MonkeyPatch) -> None:
+    import make_char_dataset.backends.comfy as comfy_mod
+    from make_char_dataset.generate import _select_backend
+
+    captured: dict[str, object] = {}
+
+    class FakeFlux:
+        def __init__(self, **kwargs: object) -> None:
+            captured.update(kwargs)
+
+    monkeypatch.setattr(comfy_mod, "FluxImg2ImgBackend", FakeFlux)
+
+    class Settings:
+        backend = "comfyui"
+        comfy_url = "http://comfy:8188"
+        base_model = "flux"  # <- routes to the restylization backend
+        style_lora_path = "/models/loras/cmcstyle_1400.safetensors"
+        style_lora_weight = 0.85
+        style_prompt = "cmcstyle"
+        gen_unet = "flux1-dev-fp8.safetensors"
+        gen_clip_l = "clip_l.safetensors"
+        gen_t5xxl = "t5xxl_fp8_e4m3fn.safetensors"
+        gen_vae = "ae.safetensors"
+        gen_guidance = 3.5
+        gen_steps = 24
+
+    backend = _select_backend(Settings())
+    assert isinstance(backend, FakeFlux)
+    assert captured["t5xxl"] == "t5xxl_fp8_e4m3fn.safetensors"  # the Flux-specific wiring
+    assert captured["style_lora_path"] == "/models/loras/cmcstyle_1400.safetensors"
+    assert captured["guidance"] == 3.5
+    assert captured["base_url"] == "http://comfy:8188"
+
+
+def test_combine_prompt_appends_style_only_when_present() -> None:
+    assert _combine_prompt("a man standing", "cmcstyle") == "a man standing, cmcstyle"
+    assert _combine_prompt("a man standing", "") == "a man standing"
+
+
+def test_extract_error_reads_comfy_history_status() -> None:
+    # a failed prompt: execution_error message with an exception detail
+    errored = {
+        "status": {
+            "status_str": "error",
+            "messages": [
+                ["execution_start", {}],
+                [
+                    "execution_error",
+                    {"node_type": "KSampler", "exception_message": "CUDA out of memory"},
+                ],
+            ],
+        }
+    }
+    msg = _extract_error(errored)
+    assert msg is not None
+    assert "CUDA out of memory" in msg
+    assert "KSampler" in msg
+    # a bare error status with no detailed message still reports an error
+    assert _extract_error({"status": {"status_str": "error", "messages": []}}) == "execution error"
+    # a successful prompt has no error
+    assert _extract_error({"status": {"status_str": "success", "messages": []}}) is None
+    # a malformed/absent status is tolerated
+    assert _extract_error({}) is None
+
+
+def test_plan_fans_across_outfit_and_emotion_anchors() -> None:
+    """The whole passport set is multiplied: outfit + emotion anchors are used too."""
+    anchors = (
+        [{"role": "face", "dest": f"face_{i}.png"} for i in range(2)]
+        + [{"role": "body", "dest": f"body_{i}.png"} for i in range(3)]
+        + [{"role": "outfit", "dest": f"outfit_{i}.png"} for i in range(5)]
+        + [{"role": "emotion", "dest": f"emotion_{i}.png"} for i in range(3)]
+    )
+    specs = plan_variants({"anchors": anchors, "identity": {}}, 40)
+
+    used = {spec.anchor_dest for spec in specs}
+    assert len(used) == 13  # every anchor conditions at least one variant (not just body/face)
+    for spec in specs:
+        role = spec.anchor_dest.split("_", 1)[0]
+        if spec.shot_class == "portrait":
+            assert role in ("face", "emotion")  # portraits carry expression variety
+        else:
+            assert role in ("body", "outfit")  # fuller shots carry clothing variety
+
+
+def test_comfy_controlnet_unknown_mode_falls_back_to_scaled_anchor() -> None:
+    # model + a mode with no preprocessor -> ControlNet wired off the raw scaled anchor
+    backend = ComfyBackend(controlnet_model="cn.safetensors")
+    spec = VariantSpec(0, "full_body", "a.png", "p", 1, 0.75, "canny", "768x1024")
+    graph = backend._build_workflow(spec, "a.png")
+    class_types = {node["class_type"] for node in graph.values()}
+    assert "ControlNetApply" in class_types
+    assert "OpenposePreprocessor" not in class_types
+    assert "Zoe-DepthMapPreprocessor" not in class_types
+    assert graph["controlnet_apply"]["inputs"]["image"] == ["scale", 0]

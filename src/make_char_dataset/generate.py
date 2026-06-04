@@ -45,13 +45,17 @@ RECIPE_WEIGHTS: dict[str, float] = {
     "angle": 0.10,
 }
 
-# Which anchor role best conditions each shot class (identity stays constant by
-# img2img-ing the character's own anchor).
-_CLASS_ROLE: dict[str, str] = {
-    "full_body": "body",
-    "mid_shot": "body",
-    "portrait": "face",
-    "angle": "body",
+# Which anchor roles condition each shot class, in preference order (identity stays
+# constant by img2img-ing the character's own anchor). Each class fans across MORE
+# than one role so the whole passport set is multiplied, not just body/face: outfit
+# anchors carry clothing variety into the fuller shots, and emotion anchors carry
+# expression variety into portraits. A passport with only body/face anchors degrades
+# to the body/face pools (the secondary roles are simply absent).
+_CLASS_ROLES: dict[str, tuple[str, ...]] = {
+    "full_body": ("body", "outfit"),
+    "mid_shot": ("body", "outfit"),
+    "portrait": ("face", "emotion"),
+    "angle": ("body", "outfit"),
 }
 
 _SHOT_FRAMING: dict[str, str] = {
@@ -180,9 +184,16 @@ def _anchors_by_role(anchors: Sequence[Mapping[str, Any]]) -> dict[str, list[dic
     return by_role
 
 
-def _pick_anchor(by_role: dict[str, list[dict[str, Any]]], role: str, nth: int) -> dict[str, Any]:
-    """Round-robin an anchor of ``role``; fall back to body, then any role."""
-    pool = by_role.get(role) or by_role.get("body") or by_role.get("face")
+def _pick_anchor(
+    by_role: dict[str, list[dict[str, Any]]], roles: Sequence[str], nth: int
+) -> dict[str, Any]:
+    """Round-robin across the anchors of ``roles`` (preference order); else any anchor.
+
+    Concatenating the preferred roles' pools (e.g. body + outfit) means the
+    round-robin visits every relevant anchor, so a passport's full set is multiplied
+    rather than a single role. Falls back to all anchors when none of ``roles`` exist.
+    """
+    pool = [anchor for role in roles for anchor in by_role.get(role, [])]
     if not pool:
         pool = [anchor for anchors in by_role.values() for anchor in anchors]
     return pool[nth % len(pool)]
@@ -244,7 +255,7 @@ def plan_variants(
     for shot_class in SHOT_CLASSES:
         scenes = _SCENES[shot_class]
         for nth in range(counts[shot_class]):
-            anchor = _pick_anchor(by_role, _CLASS_ROLE[shot_class], nth)
+            anchor = _pick_anchor(by_role, _CLASS_ROLES[shot_class], nth)
             dest = anchor.get("dest")
             if not dest:
                 raise GenerationError("manifest anchor is missing its 'dest' filename")
@@ -371,7 +382,26 @@ def generate_dataset(
 
 
 def _select_backend(settings: Any) -> GenerationBackend:
-    """Pick the configured backend; the heavy ComfyUI adapter is imported lazily."""
+    """Pick the configured backend; the heavy ComfyUI adapters are imported lazily.
+
+    ``base_model='flux'`` selects the restylization backend (Flux.1-dev img2img
+    through the external style LoRA — HLE-804); anything else uses the SDXL backend.
+    """
+    if settings.backend == "comfyui" and settings.base_model == "flux":
+        from make_char_dataset.backends.comfy import FluxImg2ImgBackend
+
+        return FluxImg2ImgBackend(
+            base_url=settings.comfy_url,
+            style_lora_path=settings.style_lora_path,
+            style_lora_weight=settings.style_lora_weight,
+            style_prompt=settings.style_prompt,
+            unet=settings.gen_unet,
+            clip_l=settings.gen_clip_l,
+            t5xxl=settings.gen_t5xxl,
+            vae=settings.gen_vae,
+            guidance=settings.gen_guidance,
+            steps=settings.gen_steps,
+        )
     if settings.backend == "comfyui":
         from make_char_dataset.backends.comfy import ComfyBackend
 

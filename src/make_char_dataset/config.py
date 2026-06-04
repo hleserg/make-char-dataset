@@ -98,8 +98,32 @@ class Settings(BaseSettings):
         default=0.75,
         ge=0.0,
         le=1.0,
-        description="img2img denoise strength for anchor multiplication (recipe: 0.7-0.8).",
+        description="img2img denoise strength for anchor multiplication (recipe: 0.7-0.8). "
+        "For Flux restylization a lower value (~0.45-0.6) keeps identity while applying style.",
     )
+    # Flux restylization backend (active when base_model='flux'): the split
+    # UNETLoader + DualCLIPLoader + VAELoader filenames this box uses (models/{unet,
+    # clip,vae}), plus Flux sampling knobs. T5 defaults to fp8 here (not the eval
+    # grid's fp16) because generation is bulk (~30-80 images) and fp8 ~halves the
+    # per-image cost with negligible img2img quality loss.
+    gen_unet: str = Field(
+        default="flux1-dev-fp8.safetensors",
+        description="ComfyUI UNETLoader filename for Flux generation (models/unet).",
+    )
+    gen_clip_l: str = Field(
+        default="clip_l.safetensors", description="ComfyUI clip_l filename for Flux generation."
+    )
+    gen_t5xxl: str = Field(
+        default="t5xxl_fp8_e4m3fn.safetensors",
+        description="ComfyUI t5xxl filename for Flux generation (fp8 for bulk-gen speed).",
+    )
+    gen_vae: str = Field(
+        default="ae.safetensors", description="ComfyUI Flux VAE filename for generation."
+    )
+    gen_guidance: float = Field(
+        default=3.5, gt=0.0, description="Flux generation guidance (FluxGuidance; ~3.5)."
+    )
+    gen_steps: int = Field(default=24, ge=1, description="Flux generation sampling steps.")
 
     # --- Pipeline: external style LoRA (Style Locker — style lives outside the character) ---
     style_lora_path: str = Field(
