@@ -151,6 +151,85 @@ class H(BaseHTTPRequestHandler):
                     return self._send(200, "image/png", fh.read())
             except OSError:
                 return self._send(404, "text/plain", b"not found")
+        if u.path == "/compare":
+            a = q.get("a", ["r0_sdxl"])[0]
+            b = q.get("b", ["r0_illustrious"])[0]
+            scenes = [
+                "стоит, улица, золотой час",
+                "кафе с ноутом",
+                "идёт в парке, сбоку",
+                "портрет, улыбка",
+                "у стены, руки скрещены",
+                "на диване с кофе",
+                "готовит у плиты",
+                "крыша, закат, полный рост",
+            ]
+            try:
+                names = sorted(
+                    f for f in os.listdir(os.path.join(ROOT, a)) if f.lower().endswith(".png")
+                )
+            except OSError:
+                names = []
+            rows = []
+            for i, n in enumerate(names):
+                cap = scenes[i] if i < len(scenes) else n
+                rows.append(
+                    f"<div class=cap>{i}. {cap}</div><div class=pair>"
+                    f'<div class=fig data-p="{a}/{n}" onclick="toggle(this)">'
+                    f'<a class=open target=_blank onclick="event.stopPropagation()" href="/img?p={a}/{n}">↗</a>'
+                    f'<img loading=lazy src="/img?p={a}/{n}"></div>'
+                    f'<div class=fig data-p="{b}/{n}" onclick="toggle(this)">'
+                    f'<a class=open target=_blank onclick="event.stopPropagation()" href="/img?p={b}/{n}">↗</a>'
+                    f'<img loading=lazy src="/img?p={b}/{n}"></div></div>'
+                )
+            css = (
+                "body{background:#14161b;color:#e6e6e6;font:14px system-ui;margin:0}"
+                ".top{position:sticky;top:0;z-index:3;background:#191c22;border-bottom:1px solid #2a2e37}"
+                ".bar{display:flex;gap:10px;align-items:center;padding:10px 14px}"
+                ".bar b{font-size:15px}.cnt{margin-left:auto;color:#9aa}"
+                ".go{background:#1d3a23;color:#bff5c6;border:1px solid #3a9b54;border-radius:8px;padding:8px 14px;font-weight:700;cursor:pointer;font-size:14px}"
+                ".cols{display:grid;grid-template-columns:1fr 1fr}.cols div{padding:6px;text-align:center;font-weight:700}"
+                ".l{color:#8cf}.r{color:#fc8}.cap{padding:10px 12px 4px;color:#9aa}"
+                ".pair{display:grid;grid-template-columns:1fr 1fr;gap:8px;padding:0 8px 12px}"
+                ".fig{position:relative;cursor:pointer}"
+                ".fig img{width:100%;display:block;border-radius:8px;border:2px solid #2a2e37}"
+                ".fig.picked img{border-color:#3a9b54;box-shadow:0 0 0 2px #3a9b54 inset}"
+                ".fig.picked::after{content:'\\2713';position:absolute;top:8px;left:8px;background:#3a9b54;color:#fff;border-radius:50%;width:24px;height:24px;display:flex;align-items:center;justify-content:center;font-weight:700}"
+                ".open{position:absolute;top:8px;right:8px;background:#000a;color:#fff;border-radius:6px;padding:1px 7px;text-decoration:none}"
+            )
+            js = (
+                "const picked=new Set();"
+                "function render(){document.querySelectorAll('.fig').forEach(f=>f.classList.toggle('picked',picked.has(f.dataset.p)));"
+                "document.getElementById('cnt').textContent='Выбрано: '+picked.size;}"
+                "function toggle(el){const p=el.dataset.p;picked.has(p)?picked.delete(p):picked.add(p);render();}"
+                "async function init(){try{const d=await(await fetch('/list')).json();"
+                "for(const it of d.images){if(it.d==='accept'&&(it.path.startsWith(A+'/')||it.path.startsWith(B+'/')))picked.add(it.path);}}catch(e){}render();}"
+                "async function commit(){if(picked.size===0){alert('Ничего не выбрано — отметь верные кадры.');return;}"
+                "if(picked.size<12&&!confirm('Выбрано '+picked.size+' (<12). Для крепкого круга лучше \\u226512 верных кадров. Всё равно в дообучение?'))return;"
+                "const j=await(await fetch('/commit',{method:'POST',headers:{'Content-Type':'application/json'},"
+                "body:JSON.stringify({selected:[...picked],groups:[A,B]})})).json();"
+                "alert('Утверждено: '+j.accepted+' в дообучение, '+j.rejected+' в брак. Агент запустит следующий круг.');}"
+                "init();"
+            )
+            page = (
+                "<!doctype html><meta charset=utf-8>"
+                "<meta name=viewport content='width=device-width,initial-scale=1'>"
+                f"<title>compare</title><style>{css}</style>"
+                "<div class=top><div class=bar>"
+                "<b>R0 — отметь верные кадры (клик по картинке)</b>"
+                "<span id=cnt class=cnt>Выбрано: 0</span>"
+                "<button class=go onclick=commit()>✅ Утвердить → в дообучение</button>"
+                "</div><div class=cols><div class=l>vanilla SDXL</div><div class=r>Illustrious</div></div></div>"
+                + "".join(rows)
+                + "<script>const A="
+                + json.dumps(a)
+                + ";const B="
+                + json.dumps(b)
+                + ";"
+                + js
+                + "</script>"
+            )
+            return self._send(200, "text/html; charset=utf-8", page.encode())
         return self._send(404, "text/plain", b"?")
 
     def do_POST(self):
@@ -174,6 +253,35 @@ class H(BaseHTTPRequestHandler):
             )
             return self._send(
                 200, "application/json", json.dumps({"ok": 1, "accepted": len(accepted)}).encode()
+            )
+        if u.path == "/commit":
+            # Compare-page approve: selected -> accept (next-round trainset),
+            # every other frame in the compared groups -> reject. Then kick a retrain.
+            length = int(self.headers.get("Content-Length", "0") or "0")
+            try:
+                data = json.loads(self.rfile.read(length) or b"{}")
+            except (ValueError, OSError):
+                data = {}
+            selected = set(data.get("selected", []))
+            grps = data.get("groups", [])
+            universe = (
+                [p for p in scan() if any(p.startswith(g + "/") for g in grps)]
+                if grps
+                else list(selected)
+            )
+            st = load_state()
+            for p in universe:
+                st[p] = "accept" if p in selected else "reject"
+            save_state(st)
+            accepted = [p for p, d in st.items() if d == "accept"]
+            json.dump(
+                {"action": "retrain", "accepted": accepted, "root": ROOT}, open(CMD, "w"), indent=2
+            )
+            rejected = sum(1 for p in universe if p not in selected)
+            return self._send(
+                200,
+                "application/json",
+                json.dumps({"ok": 1, "accepted": len(accepted), "rejected": rejected}).encode(),
             )
         return self._send(404, "text/plain", b"?")
 
