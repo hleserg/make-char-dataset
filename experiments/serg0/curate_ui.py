@@ -16,8 +16,11 @@ from __future__ import annotations
 
 import json
 import os
+import time
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+ACCESS = os.environ.get("CURATE_ACCESS", "/workspace/ui_last_access")
 
 ROOT = os.environ.get("CURATE_ROOT", "/workspace/out")
 PORT = int(os.environ.get("CURATE_PORT", "8090"))
@@ -117,7 +120,15 @@ class H(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _touch(self):
+        try:
+            with open(ACCESS, "w") as fh:
+                fh.write(str(int(time.time())))
+        except OSError:
+            pass
+
     def do_GET(self):
+        self._touch()
         u = urllib.parse.urlparse(self.path)
         q = urllib.parse.parse_qs(u.query)
         if u.path == "/":
