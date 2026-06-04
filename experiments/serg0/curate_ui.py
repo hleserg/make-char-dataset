@@ -16,9 +16,12 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+TARGET = 30  # optimal keeper count to aim for across rounds (goal 30-40)
 
 ACCESS = os.environ.get("CURATE_ACCESS", "/workspace/ui_last_access")
 
@@ -51,8 +54,8 @@ PAGE = r"""<!doctype html><html><head><meta charset=utf-8>
  <select id=grp onchange=load()></select>
  <span class=pill id=ca>✓ 0</span><span class=pill id=cr>✗ 0</span><span class=pill id=cp>· 0</span>
  <span id=act>
-   <button onclick="pipe('regenerate')">↻ Сгенерить ещё</button>
-   <button onclick="pipe('retrain')">⇪ На дообучение (принятые)</button>
+   <button onclick="pipe('generate')">💾 Сохранить + ещё круг</button>
+   <button onclick="pipe('done')">✅ Хватит — собрать датасет</button>
  </span>
 </header>
 <div class=grid id=grid></div>
@@ -82,8 +85,10 @@ async function load(){
 }
 async function mark(p,d){await fetch('/mark?p='+encodeURIComponent(p)+'&d='+d,{method:'POST'});
   const it=DATA.images.find(x=>x.path===p);if(it)it.d=(it.d===d?'':d);load();}
-async function pipe(action){const r=await fetch('/pipe?action='+action,{method:'POST'});const j=await r.json();
-  alert(action+': записано ('+j.accepted+' принятых). Агент подхватит.');}
+async function pipe(action){if(action==='done'&&!confirm('Собрать финальный датасет из всех отобранных?'))return;
+  const r=await fetch('/pipe?action='+action,{method:'POST'});const j=await r.json();
+  alert(action==='done'?('Датасет: '+j.accepted+' кадров — собираю на поде, итог в телегу.')
+    :('Всего отобрано: '+j.accepted+'. Запускаю следующий круг — ссылка придёт в телегу.'));}
 load();
 </script></body></html>"""
 
@@ -99,6 +104,19 @@ def scan():
 
 def groups(imgs):
     return sorted({p.split("/")[0] for p in imgs if "/" in p})
+
+
+def latest_round():
+    """Highest generation-round index N for which an r{N}_sdxl dir exists (else 0)."""
+    rs = []
+    try:
+        for d in os.listdir(ROOT):
+            m = re.match(r"r(\d+)_sdxl$", d)
+            if m and os.path.isdir(os.path.join(ROOT, d)):
+                rs.append(int(m.group(1)))
+    except OSError:
+        pass
+    return max(rs) if rs else 0
 
 
 def load_state():
@@ -152,24 +170,22 @@ class H(BaseHTTPRequestHandler):
             except OSError:
                 return self._send(404, "text/plain", b"not found")
         if u.path == "/compare":
-            a = q.get("a", ["r0_sdxl"])[0]
-            b = q.get("b", ["r0_illustrious"])[0]
-            scenes = [
-                "стоит, улица, золотой час",
-                "кафе с ноутом",
-                "идёт в парке, сбоку",
-                "портрет, улыбка",
-                "у стены, руки скрещены",
-                "на диване с кофе",
-                "готовит у плиты",
-                "крыша, закат, полный рост",
-            ]
+            # default to the latest generation round; ?a/?b override for older rounds
+            rn = latest_round()
+            a = q.get("a", [f"r{rn}_sdxl"])[0]
+            b = q.get("b", [f"r{rn}_illustrious"])[0]
+            try:
+                scenes = json.load(open(os.path.join(ROOT, f"r{rn}_scenes.json")))
+            except (OSError, ValueError):
+                scenes = []
             try:
                 names = sorted(
                     f for f in os.listdir(os.path.join(ROOT, a)) if f.lower().endswith(".png")
                 )
             except OSError:
                 names = []
+            st = load_state()
+            keepers = sum(1 for v in st.values() if v == "accept")
             rows = []
             for i, n in enumerate(names):
                 cap = scenes[i] if i < len(scenes) else n
@@ -185,9 +201,11 @@ class H(BaseHTTPRequestHandler):
             css = (
                 "body{background:#14161b;color:#e6e6e6;font:14px system-ui;margin:0}"
                 ".top{position:sticky;top:0;z-index:3;background:#191c22;border-bottom:1px solid #2a2e37}"
-                ".bar{display:flex;gap:10px;align-items:center;padding:10px 14px}"
-                ".bar b{font-size:15px}.cnt{margin-left:auto;color:#9aa}"
-                ".go{background:#1d3a23;color:#bff5c6;border:1px solid #3a9b54;border-radius:8px;padding:8px 14px;font-weight:700;cursor:pointer;font-size:14px}"
+                ".bar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:10px 14px}"
+                ".bar b{font-size:15px}.cnt{color:#9aa}.tot{margin-left:auto;color:#bff5c6;font-weight:700}"
+                ".go,.done{border-radius:8px;padding:8px 14px;font-weight:700;cursor:pointer;font-size:14px}"
+                ".go{background:#1d3a23;color:#bff5c6;border:1px solid #3a9b54}"
+                ".done{background:#26303a;color:#bfe0ff;border:1px solid #4a78a8}"
                 ".cols{display:grid;grid-template-columns:1fr 1fr}.cols div{padding:6px;text-align:center;font-weight:700}"
                 ".l{color:#8cf}.r{color:#fc8}.cap{padding:10px 12px 4px;color:#9aa}"
                 ".pair{display:grid;grid-template-columns:1fr 1fr;gap:8px;padding:0 8px 12px}"
@@ -200,25 +218,29 @@ class H(BaseHTTPRequestHandler):
             js = (
                 "const picked=new Set();"
                 "function render(){document.querySelectorAll('.fig').forEach(f=>f.classList.toggle('picked',picked.has(f.dataset.p)));"
-                "document.getElementById('cnt').textContent='Выбрано: '+picked.size;}"
+                "document.getElementById('cnt').textContent='Выбрано в этом круге: '+picked.size;}"
                 "function toggle(el){const p=el.dataset.p;picked.has(p)?picked.delete(p):picked.add(p);render();}"
                 "async function init(){try{const d=await(await fetch('/list')).json();"
                 "for(const it of d.images){if(it.d==='accept'&&(it.path.startsWith(A+'/')||it.path.startsWith(B+'/')))picked.add(it.path);}}catch(e){}render();}"
-                "async function commit(){if(picked.size===0){alert('Ничего не выбрано — отметь верные кадры.');return;}"
-                "if(picked.size<12&&!confirm('Выбрано '+picked.size+' (<12). Для крепкого круга лучше \\u226512 верных кадров. Всё равно в дообучение?'))return;"
+                "async function commit(action){"
+                "if(action==='done'&&!confirm('Собрать финальный датасет из всех отобранных и закончить циклы?'))return;"
                 "const j=await(await fetch('/commit',{method:'POST',headers:{'Content-Type':'application/json'},"
-                "body:JSON.stringify({selected:[...picked],groups:[A,B]})})).json();"
-                "alert('Утверждено: '+j.accepted+' в дообучение, '+j.rejected+' в брак. Агент запустит следующий круг.');}"
+                "body:JSON.stringify({selected:[...picked],groups:[A,B],action})})).json();"
+                "if(action==='done'){alert('Готово: '+j.accepted+' кадров в датасет. Сборка на поде — итог придёт в телегу.');}"
+                "else{alert('Сохранено в круге: '+picked.size+' · всего отобрано: '+j.accepted+'/'+j.target+'. "
+                "Запускаю следующий круг — ссылка придёт в телегу.');}}"
                 "init();"
             )
             page = (
                 "<!doctype html><meta charset=utf-8>"
                 "<meta name=viewport content='width=device-width,initial-scale=1'>"
-                f"<title>compare</title><style>{css}</style>"
+                f"<title>compare r{rn}</title><style>{css}</style>"
                 "<div class=top><div class=bar>"
-                "<b>R0 — отметь верные кадры (клик по картинке)</b>"
-                "<span id=cnt class=cnt>Выбрано: 0</span>"
-                "<button class=go onclick=commit()>✅ Утвердить → в дообучение</button>"
+                f"<b>Круг {rn} — отметь верные кадры (клик)</b>"
+                "<span id=cnt class=cnt>Выбрано в этом круге: 0</span>"
+                f"<span class=tot>Отобрано всего: {keepers}/{TARGET}</span>"
+                "<button class=go onclick=\"commit('generate')\">💾 Сохранить + ещё круг</button>"
+                "<button class=done onclick=\"commit('done')\">✅ Хватит — собрать датасет</button>"
                 "</div><div class=cols><div class=l>vanilla SDXL</div><div class=r>Illustrious</div></div></div>"
                 + "".join(rows)
                 + "<script>const A="
@@ -245,18 +267,21 @@ class H(BaseHTTPRequestHandler):
             save_state(st)
             return self._send(200, "application/json", b'{"ok":1}')
         if u.path == "/pipe":
-            action = q.get("action", [""])[0]
+            action = q.get("action", ["generate"])[0]
             st = load_state()
             accepted = [p for p, d in st.items() if d == "accept"]
             json.dump(
                 {"action": action, "accepted": accepted, "root": ROOT}, open(CMD, "w"), indent=2
             )
             return self._send(
-                200, "application/json", json.dumps({"ok": 1, "accepted": len(accepted)}).encode()
+                200,
+                "application/json",
+                json.dumps({"ok": 1, "accepted": len(accepted), "target": TARGET}).encode(),
             )
         if u.path == "/commit":
-            # Compare-page approve: selected -> accept (next-round trainset),
-            # every other frame in the compared groups -> reject. Then kick a retrain.
+            # Compare-page: selected -> accept (keepers for the dataset), every other
+            # frame in the compared groups -> reject. action=generate kicks the next
+            # round; action=done assembles the dataset. Consumed once by pipe_worker.
             length = int(self.headers.get("Content-Length", "0") or "0")
             try:
                 data = json.loads(self.rfile.read(length) or b"{}")
@@ -264,6 +289,7 @@ class H(BaseHTTPRequestHandler):
                 data = {}
             selected = set(data.get("selected", []))
             grps = data.get("groups", [])
+            action = data.get("action", "generate")
             universe = (
                 [p for p in scan() if any(p.startswith(g + "/") for g in grps)]
                 if grps
@@ -275,13 +301,15 @@ class H(BaseHTTPRequestHandler):
             save_state(st)
             accepted = [p for p, d in st.items() if d == "accept"]
             json.dump(
-                {"action": "retrain", "accepted": accepted, "root": ROOT}, open(CMD, "w"), indent=2
+                {"action": action, "accepted": accepted, "root": ROOT}, open(CMD, "w"), indent=2
             )
             rejected = sum(1 for p in universe if p not in selected)
             return self._send(
                 200,
                 "application/json",
-                json.dumps({"ok": 1, "accepted": len(accepted), "rejected": rejected}).encode(),
+                json.dumps(
+                    {"ok": 1, "accepted": len(accepted), "rejected": rejected, "target": TARGET}
+                ).encode(),
             )
         return self._send(404, "text/plain", b"?")
 

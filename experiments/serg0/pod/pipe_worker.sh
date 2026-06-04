@@ -1,44 +1,44 @@
 #!/usr/bin/env bash
-# Acts on UI "pipe" buttons: reads /workspace/ui_command.json (written by curate_ui)
-# and runs the next pipe step. retrain = fold accepted gens into the trainset + relaunch
-# kohya on Illustrious; regenerate = notify (gen script wired after a base is chosen).
-WS=/workspace; TG=$WS/tg.sh; CMD=$WS/ui_command.json; SEEN=$WS/.ui_cmd_seen
-CKPT=$WS/ComfyUI/models/checkpoints
-touch "$SEEN"
+# Acts on UI buttons (curate_ui writes /workspace/ui_command.json). The loop is now
+# GENERATION-ONLY (no training):
+#   action=generate -> launch the next round (run_round.sh, auto round number)
+#   action=done     -> assemble all accepted frames into /workspace/serg0_dataset
+# The command file is consumed EXACTLY ONCE (moved aside immediately) so a poll can
+# never re-fire it into an unbounded-round cost runaway.
+WS=/workspace
+TG=$WS/tg.sh
+CMD=$WS/ui_command.json
+LAST=$WS/.ui_cmd_last
+PODID=$(tr '\0' '\n' </proc/1/environ 2>/dev/null | grep -m1 '^RUNPOD_POD_ID=' | cut -d= -f2-)
+LINK="https://${PODID}-8080.proxy.runpod.net/compare"
+generating(){ [ -f "$WS/.generating" ] || [ "$(pgrep -fc gen_spread.py)" != "0" ]; }
+
 while true; do
-  if [ -f "$CMD" ] && [ "$CMD" -nt "$SEEN" ]; then
-    touch "$SEEN"
-    action=$(python3 -c "import json;print(json.load(open('$CMD')).get('action',''))" 2>/dev/null)
-    n=$(python3 -c "import json;print(len(json.load(open('$CMD')).get('accepted',[])))" 2>/dev/null)
-    bash "$TG" "🛠 UI: команда '$action' (принятых: $n) — обрабатываю..."
-    if [ "$action" = "retrain" ]; then
-      rm -rf "$WS/serg0_accepted"; mkdir -p "$WS/serg0_accepted"
+  if [ -f "$CMD" ]; then
+    mv -f "$CMD" "$LAST" 2>/dev/null || { sleep 5; continue; }   # consume exactly once
+    action=$(python3 -c "import json;print(json.load(open('$LAST')).get('action',''))" 2>/dev/null)
+    n=$(python3 -c "import json;print(len(json.load(open('$LAST')).get('accepted',[])))" 2>/dev/null)
+    if [ "$action" = "generate" ] || [ "$action" = "retrain" ]; then
+      if generating; then
+        bash "$TG" "↻ Уже идёт генерация круга — дождись её конца. Всего отобрано: $n."
+      else
+        bash "$TG" "💾 Отобрано всего: $n. Запускаю следующий круг…"
+        setsid nohup bash "$WS/run_round.sh" >"$WS/run_round.log" 2>&1 </dev/null &
+      fi
+    elif [ "$action" = "done" ]; then
+      rm -rf "$WS/serg0_dataset"; mkdir -p "$WS/serg0_dataset"
       python3 -c "
 import json, os, shutil
-d = json.load(open('$CMD')); root = d.get('root', '$WS/out')
+d = json.load(open('$LAST')); root = d.get('root', '$WS/out')
 for p in d.get('accepted', []):
     s = os.path.join(root, p)
     if os.path.exists(s):
-        shutil.copy(s, os.path.join('$WS/serg0_accepted', os.path.basename(p)))
+        shutil.copy(s, os.path.join('$WS/serg0_dataset', p.replace('/', '_')))
 "
-      python "$WS/runpod_serg0/build_trainset.py" --refs "$WS/serg0_refs" --out "$WS/serg0_train_r" \
-        --trigger serg0 --repeats 10 --extra-dir "$WS/serg0_accepted"
-      cd "$WS/sd-scripts"
-      setsid nohup venv/bin/python -m accelerate.commands.launch --num_processes 1 --mixed_precision bf16 \
-        --dynamo_backend no sdxl_train_network.py \
-        --pretrained_model_name_or_path="$CKPT/Illustrious-XL-v1.0.safetensors" \
-        --output_dir="$WS/out/lora_ill_r" --output_name=serg0_ill_r \
-        --train_data_dir="$WS/serg0_train_r" --resolution=1024,1024 --network_module=networks.lora \
-        --network_dim=32 --network_alpha=16 --train_batch_size=1 --max_train_steps=1800 \
-        --learning_rate=1e-4 --optimizer_type=AdamW8bit --lr_scheduler=cosine --mixed_precision=bf16 \
-        --save_precision=fp16 --save_every_n_steps=400 --save_model_as=safetensors --cache_latents \
-        --gradient_checkpointing --sdpa --caption_extension=.txt --shuffle_caption --keep_tokens=1 --seed=42 \
-        >"$WS/train_ill_r.log" 2>&1 </dev/null &
+      cnt=$(ls "$WS"/serg0_dataset/*.png 2>/dev/null | wc -l)
       rm -f "$WS/waiting_for_ui"
-      bash "$TG" "⇪ Дообучение запущено: Illustrious + база + $n принятых кадров. Лог train_ill_r.log."
-    elif [ "$action" = "regenerate" ]; then
-      bash "$TG" "↻ Запрос на догенерацию ($n принятых как референс). Ген-скрипт подключу после выбора базы по R0."
+      bash "$TG" "✅ Датасет собран: $cnt кадров в /workspace/serg0_dataset. Готов к обучению/выгрузке. $LINK"
     fi
   fi
-  sleep 20
+  sleep 15
 done
