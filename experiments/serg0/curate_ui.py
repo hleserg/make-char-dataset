@@ -241,7 +241,7 @@ class H(BaseHTTPRequestHandler):
                 f"<span class=tot>Отобрано всего: {keepers}/{TARGET}</span>"
                 "<button class=go onclick=\"commit('generate')\">💾 Сохранить + ещё круг</button>"
                 "<button class=done onclick=\"commit('done')\">✅ Хватит — собрать датасет</button>"
-                "</div><div class=cols><div class=l>vanilla SDXL</div><div class=r>Illustrious</div></div></div>"
+                f"</div><div class=cols><div class=l>{a}</div><div class=r>{b}</div></div></div>"
                 + "".join(rows)
                 + "<script>const A="
                 + json.dumps(a)

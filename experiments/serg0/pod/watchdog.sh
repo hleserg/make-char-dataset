@@ -14,11 +14,13 @@ mtime(){ stat -c %Y "$1" 2>/dev/null || echo 0; }
 stop_pod(){ K=$(cat "$KEYF" 2>/dev/null); curl -s -m20 -X POST -H "Authorization: Bearer $K" "https://rest.runpod.io/v1/pods/${PODID}/stop" >/dev/null 2>&1; }
 training(){ [ "$(pgrep -fc sdxl_train_network.py)" != "0" ]; }
 generating(){ [ -f "$WS/.generating" ] || [ "$(pgrep -fc gen_spread.py)" != "0" ]; }
+improving(){ [ -f "$WS/.improving" ] || [ "$(pgrep -fc improve.py)" != "0" ]; }
 last_act=$(date +%s); reminders=0; reminded=0
 while true; do
   now=$(date +%s)
   if training; then last_act=$now; reminders=0; sleep 120; continue; fi
   if generating; then last_act=$now; reminders=0; sleep 120; continue; fi
+  if improving; then last_act=$now; reminders=0; sleep 120; continue; fi
   # any UI access or agent heartbeat counts as activity
   a=$(cat "$ACCESS" 2>/dev/null || echo 0); h=$(mtime "$HB")
   [ "${a:-0}" -gt "$last_act" ] && last_act=$a
