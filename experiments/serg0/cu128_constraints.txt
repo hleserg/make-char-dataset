@@ -1,0 +1,11 @@
+# cu128 LANDMINE GUARD — pin the exact stack the RTX 5070 Ti (Blackwell sm_120) needs.
+# Use as: pip install -c experiments/serg0/cu128_constraints.txt <pkg>
+# so a transitive dep can NEVER swap the cu128 nightly torch for a stock wheel (that kills
+# 5070 Ti support + ComfyUI — the exact failure that hit the pod). Prefer --no-deps for
+# heavy packages (ultralytics, controlnet_aux) and add only the small missing deps.
+torch==2.12.0.dev20260407+cu128
+torchvision==0.27.0.dev20260407+cu128
+numpy==2.4.6
+opencv-python==4.13.0.0
+opencv-contrib-python==4.13.0.0
+opencv-python-headless==4.13.0.0
