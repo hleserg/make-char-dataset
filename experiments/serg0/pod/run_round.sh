@@ -16,11 +16,29 @@ else
   N=$(((${N:--1}) + 1))
 fi
 
+NS=$(python3 -c "import json;print(len(json.load(open('$WS/scene_bank.json'))))" 2>/dev/null || echo "?")
+# Two fresh ComfyUI instances (8189 + 8190), one per base, so both generate in parallel.
+# Each gets its OWN output/temp dir so they never overwrite each other's frames. We avoid
+# the long-lived 8188 (its warm cache returned empty 0.00s "cache hits").
+ensure_comfy(){  # <port> <outdir> <tmpdir>
+  curl -sf -m3 "http://127.0.0.1:$1/" >/dev/null 2>&1 && return 0
+  mkdir -p "$2" "$3"
+  (cd "$WS/ComfyUI" && setsid nohup python main.py --listen 127.0.0.1 --port "$1" \
+    --output-directory "$2" --temp-directory "$3" --disable-all-custom-nodes \
+    >"$WS/comfy_$1.log" 2>&1 </dev/null &)
+}
+ensure_comfy 8189 "$WS/comfy_8189_out" "$WS/comfy_8189_tmp"
+ensure_comfy 8190 "$WS/comfy_8190_out" "$WS/comfy_8190_tmp"
+for _ in $(seq 1 90); do
+  curl -sf -m3 http://127.0.0.1:8189/ >/dev/null 2>&1 &&
+    curl -sf -m3 http://127.0.0.1:8190/ >/dev/null 2>&1 && break
+  sleep 2
+done
 rm -f "$WS/waiting_for_ui"
 touch "$WS/.generating" "$WS/agent_heartbeat"
-bash "$TG" "⏳ Генерю круг $N (16 пар, обе базы)… пришлю ссылку, когда будет готово."
+bash "$TG" "⏳ Генерю круг $N — ВСЕ $NS сцен на обеих базах ($((NS * 2)) кадров, надолго ~40-50 мин). Пришлю ссылку, когда будет готово."
 
-python "$WS/gen_spread.py" "$N" >"$WS/gen_r${N}.log" 2>&1
+python "$WS/gen_spread.py" "$N" all >"$WS/gen_r${N}.log" 2>&1
 rc=$?
 
 rm -f "$WS/.generating"

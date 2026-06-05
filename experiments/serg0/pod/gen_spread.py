@@ -19,6 +19,7 @@ import json
 import os
 import re
 import sys
+import threading
 import time
 import urllib.parse
 import urllib.request
@@ -27,10 +28,17 @@ WS = "/workspace"
 BASE = "http://127.0.0.1:8188"
 HB = f"{WS}/agent_heartbeat"
 OUT = f"{WS}/out"
-PAIRS = 16  # doubled: 16 scene-pairs => 16 SDXL + 16 Illustrious per round
+PAIRS = 16  # default slice size (overridden by "all")
+# Each base runs on its OWN fresh ComfyUI instance (8189/8190) so both generate in
+# parallel on the GPU. (8188 is the long-lived exposed instance; not used for gen.)
 JOBS = [
-    ("sd_xl_base_1.0.safetensors", "serg0_sdxl.safetensors", "sdxl"),
-    ("Illustrious-XL-v1.0.safetensors", "serg0_ill.safetensors", "illustrious"),
+    ("sd_xl_base_1.0.safetensors", "serg0_sdxl.safetensors", "sdxl", "http://127.0.0.1:8190"),
+    (
+        "Illustrious-XL-v1.0.safetensors",
+        "serg0_ill.safetensors",
+        "illustrious",
+        "http://127.0.0.1:8189",
+    ),
 ]
 # Character-agnostic scenes (pose / setting / camera / lighting only).
 INLINE = [
@@ -108,23 +116,31 @@ def next_round():
     return (max(rs) + 1) if rs else 0
 
 
-def sample(graph_, timeout=300, poll=2.0):
+def sample(graph_, url=BASE, timeout=300, poll=1.5):
     req = urllib.request.Request(
-        BASE + "/prompt",
+        url + "/prompt",
         data=json.dumps({"prompt": graph_}).encode(),
         headers={"Content-Type": "application/json"},
     )
     pid = json.loads(urllib.request.urlopen(req, timeout=30).read())["prompt_id"]
     end = time.monotonic() + timeout
+    empty = 0  # times we saw the history entry "done" but with no image yet
     while time.monotonic() < end:
-        e = json.loads(urllib.request.urlopen(BASE + f"/history/{pid}", timeout=15).read()).get(pid)
+        e = json.loads(urllib.request.urlopen(url + f"/history/{pid}", timeout=15).read()).get(pid)
         if e:
             for n in e.get("outputs", {}).values():
                 for im in n.get("images", []):
                     return urllib.request.urlopen(
-                        BASE + "/view?" + urllib.parse.urlencode(im), timeout=30
+                        url + "/view?" + urllib.parse.urlencode(im), timeout=30
                     ).read()
-            raise RuntimeError(f"no image; status={e.get('status', {})}")
+            st = e.get("status", {})
+            if st.get("status_str") == "error":
+                raise RuntimeError(f"exec error: {st}")
+            # entry present but outputs not populated yet — give it a short grace
+            if st.get("completed"):
+                empty += 1
+                if empty >= 6:
+                    raise RuntimeError(f"completed no image: {st}")
         time.sleep(poll)
     raise TimeoutError(pid)
 
@@ -168,29 +184,47 @@ def graph(ckpt, lora, prompt, seed):
     }
 
 
+def run_job(ckpt, lora, tag, url, scenes, r):
+    """One base, its own ComfyUI instance — runs in its own thread (GPU-shared)."""
+    outdir = f"{OUT}/r{r}_{tag}"
+    os.makedirs(outdir, exist_ok=True)
+    for i, sc in enumerate(scenes):
+        try:
+            open(HB, "w").write(str(int(time.time())))
+        except OSError:
+            pass
+        t = time.time()
+        try:
+            prompt = f"serg0, 1boy, solo, {sc}, masterpiece, best quality"
+            png = sample(graph(ckpt, lora, prompt, 7000 + r * 1000 + i), url=url)
+            open(os.path.join(outdir, f"{i:03d}.png"), "wb").write(png)
+            print(f"r{r}_{tag} {i}: ok {time.time() - t:.0f}s", flush=True)
+        except Exception as exc:
+            print(f"r{r}_{tag} {i}: FAIL {str(exc)[:120]}", flush=True)
+
+
 def main():
     r = int(sys.argv[1]) if len(sys.argv) > 1 else next_round()
+    # 2nd arg: "all" => whole bank this round; else an int count (default PAIRS slice)
+    mode = sys.argv[2] if len(sys.argv) > 2 else str(PAIRS)
     allsc = scenes_all()
     length = len(allsc)
-    scenes = [allsc[(r * PAIRS + i) % length] for i in range(PAIRS)]
+    if mode == "all":
+        scenes = list(allsc)
+    else:
+        n = int(mode)
+        scenes = [allsc[(r * n + i) % length] for i in range(n)]
     os.makedirs(OUT, exist_ok=True)
     json.dump(scenes, open(f"{OUT}/r{r}_scenes.json", "w"))
-    for ckpt, lora, tag in JOBS:
-        outdir = f"{OUT}/r{r}_{tag}"
-        os.makedirs(outdir, exist_ok=True)
-        for i, sc in enumerate(scenes):
-            try:
-                open(HB, "w").write(str(int(time.time())))
-            except OSError:
-                pass
-            t = time.time()
-            try:
-                prompt = f"serg0, 1boy, solo, {sc}, masterpiece, best quality"
-                png = sample(graph(ckpt, lora, prompt, 7000 + r * 1000 + i))
-                open(os.path.join(outdir, f"{i:02d}.png"), "wb").write(png)
-                print(f"r{r}_{tag} {i}: ok {time.time() - t:.0f}s", flush=True)
-            except Exception as exc:
-                print(f"r{r}_{tag} {i}: FAIL {str(exc)[:120]}", flush=True)
+    # both bases concurrently, each against its own ComfyUI instance
+    threads = [
+        threading.Thread(target=run_job, args=(ckpt, lora, tag, url, scenes, r))
+        for ckpt, lora, tag, url in JOBS
+    ]
+    for th in threads:
+        th.start()
+    for th in threads:
+        th.join()
     print(f"=== round {r} gen done ===", flush=True)
 
 
