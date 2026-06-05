@@ -43,11 +43,13 @@ rc=$?
 
 rm -f "$WS/.generating"
 nsd=$(ls "$WS"/out/"r${N}_sdxl"/*.png 2>/dev/null | wc -l)
-nil=$(ls "$WS"/out/"r${N}_illustrious"/*.png 2>/dev/null | wc -l)
-touch "$WS/waiting_for_ui"
 
 if [ "$rc" = "0" ] && [ "$nsd" -gt 0 ]; then
-  bash "$TG" "✅ Круг $N готов: $nsd+$nil кадров. Отбери верные и жми «Сохранить + ещё круг» → $LINK"
+  # generation done -> run ALL improvements; run_improve sets waiting_for_ui + Telegrams
+  # the raw-vs-fixed compare link. User only curates IMPROVED frames.
+  bash "$TG" "✅ Круг $N сгенерён ($nsd на базу). Запускаю улучшайзер, потом дам на отбор."
+  bash "$WS/run_improve.sh" "$N"
 else
-  bash "$TG" "⚠️ Круг $N: проблема при генерации (rc=$rc, $nsd+$nil кадров). Лог gen_r${N}.log. UI: $LINK"
+  touch "$WS/waiting_for_ui"
+  bash "$TG" "⚠️ Круг $N: проблема при генерации (rc=$rc). Лог gen_r${N}.log. UI: $LINK"
 fi

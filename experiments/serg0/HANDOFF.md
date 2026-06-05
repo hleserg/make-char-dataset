@@ -4,15 +4,23 @@ Living doc. Goal: multiply Serg0's 18 refs into a large, diverse, FAITHFUL datas
 (comic/watercolor style, NON-idealized build — NOT a square-jawed jock), then a
 character LoRA. Personal/non-commercial (InsightFace/PuLID ban waived).
 
-## Current phase (2026-06-05)
-- **Loop = GENERATION-ONLY right now (NO training).** Generate rounds of variants →
-  user curates on `/compare` → keepers accumulate → repeat until ~30-40 good, THEN train.
-- Round 0: 8+8 (curated → 7 keepers). Round 1: 16+16. Round 2: 16+16. Keepers now **16** (target 30).
-- **Round 3 RUNNING**: whole scene bank, ALL 176 scenes × 2 bases = 352 frames, parallel.
-- **In progress: best-practice IMPROVER stack** (FaceDetailer + hand + UltimateSDUpscale)
-  to fix mushy eyes/hands. User demands MAX quality, community best-practice, not coleнochный.
-  Tattoos CANNOT be filter-fixed (model doesn't know the designs + too few px at body scale) →
-  that's a future training-data fix (more arm-visible refs), not post-processing.
+## Current phase (2026-06-05) — R1 TRAINING LAUNCHED
+- Round 3 generated all 176 scenes × 2 bases → improver (`r3_*_fixed`) → user curated on
+  `/compare`. Final dataset = **113 keepers** (65 sdxl + 48 illustrious), trimmed in the
+  gallery (25 rejects moved to `serg0_dataset.trimmed`; full backup `serg0_dataset.full.bak`).
+- **Captioned** all 113 via WD14 (`caption_keepers.py`, isolated `wd14venv` CPU torch):
+  image-grounded danbooru tags, identity/build/style/piercings/tattoos PRUNED (denylist is
+  the quality lever — incl. `beard`/`stubble` substrings + anti-idealization `muscular`/`abs`)
+  so they bind to the `serg0` trigger. Refs keep their build_trainset captions (incl. tattoos).
+- **Uploaded to HF** (private) `hleserg/serg0-char-dataset` via `hf_upload.py`: keepers
+  113png+113txt + refs 18 + README. Verified by `list_repo_files` (no weights/keys; old
+  `generated/`+`references/` dirs from a prior attempt still linger — purge if a clean repo wanted).
+- **R1 char-LoRA training RUNNING** (`r1_train.sh shared`): FROM SCRATCH, both bases parallel,
+  refs ×10 + keepers ×2 (refs anchor identity/tattoos; keepers add pose/scene diversity).
+  Outputs to NEW names `serg0_sdxl_r1` / `serg0_ill_r1` (R0 left deployed as A/B baseline).
+  dim32/alpha16, lr1e-4, cosine, AdamW8bit, bf16, 2400 steps, save_every 400.
+- Tattoos still ride on the refs only (synthetic frames lost them); per-frame filter can't add
+  them back. Future fidelity fix = more arm-visible refs, not post-processing.
 
 ## Pod (RunPod L40, 48GB)
 - id `ybo69hlwaua7z9`, ip `213.181.111.2`. Proxy ssh `ybo69hlwaua7z9-6441143d@ssh.runpod.io`.
@@ -71,9 +79,10 @@ character LoRA. Personal/non-commercial (InsightFace/PuLID ban waived).
 ## Secrets leaked to chat → user must ROTATE: HF write token, manage RunPod API key, TELEGRAM token, read-only RunPod key.
 
 ## Exact next steps
-1. Finish improver install (custom_nodes + ultralytics) + model downloads (running bg).
-2. Launch 8191 with custom nodes (own dirs), confirm FaceDetailer/UltralyticsDetectorProvider/UltimateSDUpscale in /object_info.
-3. Build + VALIDATE the improve graph on 3-5 round-3 frames (Read before/after; eyes fixed, style/identity kept).
-4. Run improver over all round-3 → `_fixed`; Telegram + A/B compare link.
-5. Wire improver into run_round as the standard post-step.
-6. Keep accumulating keepers → at ~30-40 do the dual-base training round (kohya, recipe in `r0_train.sh`).
+1. R1 training finishes (~1.5-2h) → Telegram. Logs `train_sdxl_r1.log` / `train_ill_r1.log`;
+   checkpoints in `out/lora_sdxl_r1` / `out/lora_illustrious_r1` (steps 400…2400).
+2. **A/B R1 vs R0**: gen the same probe prompts with serg0_sdxl_r1 vs serg0_sdxl (and ill).
+   Pick the best checkpoint (watch overfit at high steps). Promote to deployed name ONLY if better.
+3. If R1 beats R0, optionally run another generation round with R1 LoRAs for more/better variants.
+4. Pod auto-stops 30 min after idle (watchdog). `serg0_dataset.trimmed` holds the 25 rejects if
+   any need recovering.

@@ -7,7 +7,8 @@ WS=/workspace
 TG=$WS/tg.sh
 R=${1:-3}
 PODID=$(tr '\0' '\n' </proc/1/environ 2>/dev/null | grep -m1 '^RUNPOD_POD_ID=' | cut -d= -f2-)
-LINK="https://${PODID}-8080.proxy.runpod.net/compare?a=r${R}_sdxl_fixed&b=r${R}_sdxl"
+# curation link: the IMPROVED frames of both bases (vanilla SDXL vs Illustrious) to pick from
+LINK="https://${PODID}-8080.proxy.runpod.net/compare"
 
 # ensure the improver instance (8191, WITH custom nodes) is up
 if ! curl -sf -m3 http://127.0.0.1:8191/ >/dev/null 2>&1; then

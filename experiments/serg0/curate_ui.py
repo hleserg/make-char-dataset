@@ -172,8 +172,12 @@ class H(BaseHTTPRequestHandler):
         if u.path == "/compare":
             # default to the latest generation round; ?a/?b override for older rounds
             rn = latest_round()
-            a = q.get("a", [f"r{rn}_sdxl"])[0]
-            b = q.get("b", [f"r{rn}_illustrious"])[0]
+            # Curate the IMPROVED frames when they exist (raw is only the improver input).
+            da, db = f"r{rn}_sdxl", f"r{rn}_illustrious"
+            if os.path.isdir(os.path.join(ROOT, da + "_fixed")):
+                da, db = da + "_fixed", db + "_fixed"
+            a = q.get("a", [da])[0]
+            b = q.get("b", [db])[0]
             try:
                 scenes = json.load(open(os.path.join(ROOT, f"r{rn}_scenes.json")))
             except (OSError, ValueError):
