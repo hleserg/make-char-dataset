@@ -26,7 +26,7 @@ import os
 import time
 import urllib.parse
 import urllib.request
-from typing import Callable, Optional
+from collections.abc import Callable
 
 # base tag -> (checkpoint, char-lora basename stem, esrgan upscaler)
 BASES = {
@@ -55,10 +55,20 @@ def list_loras(url: str) -> list[str]:
 
 
 def resolve_char_lora(url: str, base_tag: str) -> str:
-    """Prefer the R1 char-LoRA (serg0_*_r1) if ComfyUI sees it, else R0 (serg0_*)."""
+    """Resolve the char-LoRA ComfyUI should use, newest-trained first.
+
+    Preference: `_prod` (the peak checkpoint hand-picked from the A/B and symlinked to a
+    stable name) > `_r2` (the latest 4000-step run) > `_r1` > R0 base. This lets the prod
+    UI keep using a stable filename while we swap which checkpoint it points at.
+    """
     stem = BASES[base_tag][1]
     loras = list_loras(url)
-    for cand in (f"{stem}_r1.safetensors", f"{stem}.safetensors"):
+    for cand in (
+        f"{stem}_prod.safetensors",
+        f"{stem}_r2.safetensors",
+        f"{stem}_r1.safetensors",
+        f"{stem}.safetensors",
+    ):
         if cand in loras:
             return cand
     return f"{stem}.safetensors"
@@ -112,7 +122,7 @@ def build_graph(
     seed: int,
     *,
     improve: bool,
-    style_lora: Optional[str] = None,
+    style_lora: str | None = None,
     style_strength: float = 0.85,
     steps: int = 28,
     cfg: float = 6.5,
@@ -284,16 +294,16 @@ def generate(
     *,
     count: int = 5,
     negative: str = DEFAULT_NEG,
-    char_lora: Optional[str] = None,
-    style_lora: Optional[str] = None,
+    char_lora: str | None = None,
+    style_lora: str | None = None,
     style_strength: float = 0.85,
     improve: bool = True,
     url: str = "http://127.0.0.1:8191",
     outdir: str = "/workspace/prod_out",
-    seed0: Optional[int] = None,
+    seed0: int | None = None,
     steps: int = 28,
     cfg: float = 6.5,
-    on_event: Optional[Callable[[str, dict], None]] = None,
+    on_event: Callable[[str, dict], None] | None = None,
 ) -> list[str]:
     """Generate `count` images; return saved PNG paths. on_event(kind, data) for progress."""
     if base_tag not in BASES:
@@ -327,7 +337,7 @@ def generate(
             paths.append(p)
             if on_event:
                 on_event("done", {"index": i, "total": count, "path": p})
-        except Exception as exc:  # noqa: BLE001 — report and continue the batch
+        except Exception as exc:
             if on_event:
                 on_event("fail", {"index": i, "total": count, "error": str(exc)[:200]})
     return paths

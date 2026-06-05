@@ -98,6 +98,9 @@ packages = ["src/make_char_dataset"]
 line-length = 100
 target-version = "py312"
 src = ["src", "tests"]
+# experiments/ holds exploratory Serg0 tooling (scratch scripts, embedded HTML/prompts),
+# not the shipped package — consistent with pyright (include=src,tests) and coverage scoping.
+extend-exclude = ["experiments"]
 
 [tool.ruff.lint]
 select = ["F", "E", "W", "I", "UP", "B", "SIM", "RUF"]
