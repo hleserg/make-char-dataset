@@ -19,26 +19,26 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
-    "numpy>=2",
+    "numpy>=2.5.0",
     "pillow>=11",
     "imagehash>=4.3",
     "pydantic>=2.7",
-    "pydantic-settings>=2.3",
-    "sentry-sdk>=2.0",
+    "pydantic-settings>=2.14.2",
+    "sentry-sdk>=2.63.0",
 ]
 
 [project.optional-dependencies]
 dev = [
-    "pytest>=8.2",
+    "pytest>=9.1.1",
     "pytest-asyncio>=0.23",
     "pytest-cov>=5.0",
     "pytest-xdist>=3.6",
-    "ruff>=0.11",
-    "pyright>=1.1.380",
+    "ruff>=0.15.18",
+    "pyright>=1.1.410",
     "bandit>=1.7",
-    "pip-audit>=2.7",
+    "pip-audit>=2.10.1",
     "pre-commit>=3.7",
-    "commitizen>=3.27",
+    "commitizen>=4.16.4",
 ]
 
 [project.urls]
@@ -60,16 +60,16 @@ make-char-dataset = "make_char_dataset.cli:main"
 gpu = [
     "torch>=2.7",
     "torchvision>=0.22",
-    "diffusers>=0.30",
-    "transformers>=4.44",
-    "accelerate>=0.34",
+    "diffusers>=0.38.0",
+    "transformers>=5.12.1",
+    "accelerate>=1.14.0",
     "safetensors>=0.4",
-    "huggingface-hub>=0.24",
+    "huggingface-hub>=1.20.1",
     # WD14 tagger (Character-Locker captioning) runs via ONNX (torch-free).
     # onnxruntime-gpu has no macOS wheels, so fall back to the CPU build there to
     # keep `uv lock` resolvable.
-    "onnxruntime-gpu>=1.19 ; sys_platform == 'linux' or sys_platform == 'win32'",
-    "onnxruntime>=1.19 ; sys_platform == 'darwin'",
+    "onnxruntime-gpu>=1.27.0 ; sys_platform == 'linux' or sys_platform == 'win32'",
+    "onnxruntime>=1.27.0 ; sys_platform == 'darwin'",
 ]
 
 # CUDA wheels for torch/torchvision. cu128 carries Blackwell (sm_120, RTX 50xx)
